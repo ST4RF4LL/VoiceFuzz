@@ -2062,13 +2062,6 @@ EXP_ST void init_forkserver(char** argv) {
 
   if (pipe(st_pipe) || pipe(ctl_pipe)) PFATAL("pipe() failed");
 
-  // unlink(FIFO);
-  // int res = mkfifo(FIFO,0777);
-  // if (res==-1)
-  // {
-  //   PFATAL("FIFO failed");
-  // }
-
   forksrv_pid = fork();
 
   if (forksrv_pid < 0) PFATAL("fork() failed");
@@ -2359,9 +2352,7 @@ static u8 run_target(char** argv, u32 timeout) {
   u32 tb4;
 
   int fd[2];
-  // int fd2[2];
   if(pipe(fd))PFATAL("pipe error!");
-  // if(pipe(fd2))PFATAL("pipe error!");
 
   child_timed_out = 0;
 
@@ -2461,10 +2452,6 @@ static u8 run_target(char** argv, u32 timeout) {
 
     } 
 
-    
-
-
-
   } else {
 
     s32 res;
@@ -2527,7 +2514,7 @@ static u8 run_target(char** argv, u32 timeout) {
 
   setitimer(ITIMER_REAL, &it, NULL);
 
-  // printf("child_pid:%d",child_pid);
+  // printf("\nchild_pid:%d",child_pid);
 
   if (!WIFSTOPPED(status)) child_pid = 0;
 
@@ -2584,9 +2571,13 @@ static u8 run_target(char** argv, u32 timeout) {
   // printf("child_PID:%d,STDERR:%s\n",child_pid,child_stderr);
   char result[1024] = {0};
   read(fd[0],result,1024);
-  printf("\nchild_pid:%d##result:%s##should be:%s\n",child_pid,result,orig_trans);
-  if (strcmp(result,orig_trans)&&strcmp(orig_trans," "))
+  result[strlen(result)-1]='\0';
+  printf("\n##result:%s\n##right :%s\n",result,orig_trans);
+  close(fd[0]);
+  close(fd[1]);
+  if (strcmp(result,orig_trans)&&strcmp(orig_trans," ")&&strlen(result)>1)
   {
+    printf("Translation Wrong!\n");
     return FAULT_TRANS;
   }
   
@@ -3252,9 +3243,16 @@ static void write_crash_readme(void) {
 
 }
 
+// int levenshtein_distance(char *str_a, char *str_b)
+// {
+
+// }
+
 //Wh4lter
-static double calc_edit_distance()
+//Levenshtein temporarily
+static double calc_edit_distance(char *new_result,char *ori_result)
 {
+
   return 0;
 }
 
@@ -3290,7 +3288,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
 #endif /* ^!SIMPLE_FILES */
 
-    add_to_queue(fn, len, 0,"TODO",0);//TODO
+    add_to_queue(fn, len, 0,orig_trans,0);//TODO
 
     if (hnb == 2) {
       queue_top->has_new_cov = 1;
@@ -3428,7 +3426,8 @@ keep_as_crash:
 
     //Wh4lter
     case FAULT_TRANS:
-
+      wrong_translations++;
+      // printf("WRONG!!!!\n");
       if (!dumb_mode) {
 #ifdef WORD_SIZE_64
         simplify_trace((u64*)trace_bits);
@@ -3448,10 +3447,10 @@ keep_as_crash:
 
 #endif /* ^!SIMPLE_FILES */
 
-      wrong_translations++;
 
       }
-      break;
+      
+      return keeping;
 
     case FAULT_ERROR: FATAL("Unable to execute target application");
 
@@ -4186,7 +4185,7 @@ static void show_stats(void) {
 
   sprintf(tmp + banner_pad, "%s " cLCY VERSION cLGN
           " (%s)",  crash_mode ? cPIN "peruvian were-rabbit" : 
-          cYEL "american fuzzy lop", use_banner);
+          cYEL "american fuzzy lop Wh4lter-customed", use_banner);
 
   SAYF("\n%s\n\n", tmp);
 
@@ -4373,6 +4372,10 @@ static void show_stats(void) {
           (unique_hangs >= KEEP_UNIQUE_HANG) ? "+" : "");
 
   SAYF (bSTG bV bSTOP "  total tmouts : " cRST "%-22s " bSTG bV "\n", tmp);
+
+//Wh4lter
+  sprintf(tmp,"%s",DI(wrong_translations));
+  SAYF(bSTG bV bSTOP "wrong translations: " cRST "%-22s " bSTG bV "\n", tmp);
 
   /* Aaaalmost there... hold on! */
 
