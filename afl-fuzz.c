@@ -244,6 +244,7 @@ static FILE* plot_file;               /* Gnuplot output file              */
 //Wh4lter
 char* orig_trans;
 // char* result;
+int stdout_pipe[2];
 
 struct queue_entry {
 
@@ -352,6 +353,9 @@ enum {
   /* 06 */ FAULT_TRANS
 };
 
+//Wh4lter declared
+FILE *distance_f;
+int edit_distance_tmp=0;
 
 /* Get unix time in milliseconds */
 
@@ -2056,11 +2060,12 @@ EXP_ST void init_forkserver(char** argv) {
   int st_pipe[2], ctl_pipe[2];
   int status;
   s32 rlen;
-  // int stdout_pipe[2];
 
   ACTF("Spinning up the fork server...");
 
   if (pipe(st_pipe) || pipe(ctl_pipe)) PFATAL("pipe() failed");
+  if(pipe(stdout_pipe))PFATAL("pipe error!");
+  
 
   forksrv_pid = fork();
 
@@ -2113,12 +2118,13 @@ EXP_ST void init_forkserver(char** argv) {
 
     setsid();
 
-    dup2(dev_null_fd, 1);
-    dup2(dev_null_fd, 2);
+    // dup2(dev_null_fd, 1);//stdout
+    dup2(stdout_pipe[1], STDOUT_FILENO);//stdout
+    dup2(dev_null_fd, 2);//stderr
 
     if (out_file) {
 
-      dup2(dev_null_fd, 0);
+      dup2(dev_null_fd, 0);//stdin
 
     } else {
 
@@ -2338,6 +2344,85 @@ EXP_ST void init_forkserver(char** argv) {
 
 }
 
+int min(int x, int y)
+{
+    return x < y ? x : y;
+}
+
+int max(int x,int y)
+{
+    return x < y ? y : x;
+}
+//str_b should be the longer string
+int levenshtein_distance(char *str_a, char *str_b)
+{
+    int len_a,len_b;
+    len_a = strlen(str_a);
+    len_b = strlen(str_b);
+    if (len_a>len_b)
+    {
+        char *temp;
+        temp = str_a;
+        str_a = str_b;
+        str_b = temp;
+
+        int tem;
+        tem = len_a;
+        len_a = len_b;
+        len_b = tem;
+    }
+    
+    int matrix[len_b+1][len_b+1];
+    int curr_i = 0;
+    int len_sub_a;
+    int len_sub_b;
+    int len_sub_a_b;
+
+    for (size_t i = 0; i < len_b+1; i++)
+    {
+        for (size_t j = 0; j < len_b+1; j++)
+        {
+            matrix[i][j]=0;
+        }
+        
+    }
+    
+
+    for(size_t i = 0; i < len_a+1; i++)
+    {
+        for (size_t j = 0; j < len_b+1; j++)
+        {
+            if (min(i,j) == 0)
+            {
+                matrix[i][j] = max(i,j);
+                continue;
+            }
+            len_sub_a = matrix[1 - curr_i][j] + 1;
+            len_sub_b = matrix[curr_i][j - 1] + 1;
+            if (str_a[i - 1] != str_b[j - 1])
+            {
+                len_sub_a_b = matrix[1 - curr_i][j - 1] + 1;
+            }
+            else
+            {
+                len_sub_a_b = matrix[1 - curr_i][j - 1];
+            }
+            matrix[curr_i][j] = min(len_sub_a, min(len_sub_b, len_sub_a_b));
+        }
+        curr_i = 1 - curr_i;
+    }
+
+    return matrix[1 - curr_i][len_b];
+}
+
+
+//Wh4lter
+//Levenshtein temporarily
+static int calc_edit_distance(char *new_result,char *ori_result)
+{
+  
+  return levenshtein_distance(new_result,ori_result);
+}
 
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update trace_bits[]. */
@@ -2351,9 +2436,8 @@ static u8 run_target(char** argv, u32 timeout) {
   int status = 0;
   u32 tb4;
 
-  int fd[2];
-  if(pipe(fd))PFATAL("pipe error!");
-
+  // int fd[2];
+  // if(pipe(fd))PFATAL("pipe error!");
   child_timed_out = 0;
 
   /* After this memset, trace_bits[] are effectively volatile, so we
@@ -2368,7 +2452,7 @@ static u8 run_target(char** argv, u32 timeout) {
      execve(). There is a bit of code duplication between here and 
      init_forkserver(), but c'est la vie. */
 
-  if (dumb_mode == 1 || no_forkserver) {
+  if (dumb_mode == 1 || no_forkserver) {//no forkserver
 
     child_pid = fork();
 
@@ -2404,12 +2488,12 @@ static u8 run_target(char** argv, u32 timeout) {
 
       setsid();
 
-      dup2(dev_null_fd, 1);
-      dup2(dev_null_fd, 2);
+      // dup2(dev_null_fd, 1);//stdout
+      dup2(dev_null_fd, 2);//stderr
 
       if (out_file) {
 
-        dup2(dev_null_fd, 0);
+        dup2(dev_null_fd, 0);//stdin
 
       } else {
 
@@ -2438,8 +2522,10 @@ static u8 run_target(char** argv, u32 timeout) {
 
       //Wh4lter
 
-      close(fd[0]);
-      dup2(fd[1],STDOUT_FILENO);
+      // close(fd[0]);
+
+      // dup2(fd[1],STDOUT_FILENO);
+    dup2(stdout_pipe[1], STDOUT_FILENO);//stdout
 
       execv(target_path, argv);
 
@@ -2447,12 +2533,13 @@ static u8 run_target(char** argv, u32 timeout) {
          falling through. */
 
       *(u32*)trace_bits = EXEC_FAIL_SIG;
-      close(fd[1]);
+      // close(fd[1]);
+      // remove(fd);
       exit(0);
 
     } 
 
-  } else {
+  } else {//forkserver & parent
 
     s32 res;
 
@@ -2487,7 +2574,8 @@ static u8 run_target(char** argv, u32 timeout) {
   /* The SIGALRM handler simply kills the child_pid and sets child_timed_out. */
 
   if (dumb_mode == 1 || no_forkserver) {
-    close(fd[1]);
+    // close(fd[1]);
+
     if (waitpid(child_pid, &status, 0) <= 0) PFATAL("waitpid() failed");
 
   } else {
@@ -2570,14 +2658,19 @@ static u8 run_target(char** argv, u32 timeout) {
   // read(fd2[0],child_stderr,2048);
   // printf("child_PID:%d,STDERR:%s\n",child_pid,child_stderr);
   char result[1024] = {0};
-  read(fd[0],result,1024);
+  // read(fd[0],result,1024);
+  read(stdout_pipe[0],result,1024);
   result[strlen(result)-1]='\0';
   printf("\n##result:%s\n##right :%s\n",result,orig_trans);
-  close(fd[0]);
-  close(fd[1]);
+  // close(fd[0]);
+
+  // remove(fd);
+
   if (strcmp(result,orig_trans)&&strcmp(orig_trans," ")&&strlen(result)>1)
   {
-    printf("Translation Wrong!\n");
+    edit_distance_tmp=calc_edit_distance(result,orig_trans);
+    printf("Translation Wrong! Leve's Distance:%d\n",edit_distance_tmp);
+    // fprintf(distance_f,"%d,",tmp);
     return FAULT_TRANS;
   }
   
@@ -3243,18 +3336,7 @@ static void write_crash_readme(void) {
 
 }
 
-// int levenshtein_distance(char *str_a, char *str_b)
-// {
 
-// }
-
-//Wh4lter
-//Levenshtein temporarily
-static double calc_edit_distance(char *new_result,char *ori_result)
-{
-
-  return 0;
-}
 
 /* Check if the result of an execve() during routine fuzzing is interesting,
    save or queue the input test case for further analysis if so. Returns 1 if
@@ -3427,6 +3509,8 @@ keep_as_crash:
     //Wh4lter
     case FAULT_TRANS:
       wrong_translations++;
+    fprintf(distance_f,"%d,",edit_distance_tmp);
+
       // printf("WRONG!!!!\n");
       if (!dumb_mode) {
 #ifdef WORD_SIZE_64
@@ -3437,6 +3521,7 @@ keep_as_crash:
 
 #ifndef SIMPLE_FILES
 
+      }
       fn = alloc_printf("%s/mistakes/id:%06llu,sig:%02u,%s", out_dir,
                         wrong_translations, kill_signal, describe_op(0));
 
@@ -3448,9 +3533,8 @@ keep_as_crash:
 #endif /* ^!SIMPLE_FILES */
 
 
-      }
+      break;
       
-      return keeping;
 
     case FAULT_ERROR: FATAL("Unable to execute target application");
 
@@ -7377,6 +7461,15 @@ EXP_ST void setup_dirs_fds(void) {
   tmp = alloc_printf("%s/crashes", out_dir);
   if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
   ck_free(tmp);
+
+
+//Wh4lter wrong translation mistakes
+  tmp = alloc_printf("%s/mistakes", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+//not dir but files
+  tmp = alloc_printf("%s/edit_distance.txt", out_dir);
+  distance_f = fopen(tmp,"w");
 
   /* All recorded hangs. */
 
