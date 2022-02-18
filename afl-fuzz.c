@@ -271,7 +271,7 @@ struct queue_entry {
   // u32 parent;                         //mutated from which seed
   char* orig_translation;             //original translation
   // char* result;                       //translation after mutated
-  // double edit_distance;                  //edit distance, to evaluate the effectiveness
+  int edit_distance;                  //edit distance of the input, to evaluate the effectiveness
 
 
 
@@ -355,7 +355,10 @@ enum {
 
 //Wh4lter declared
 FILE *distance_f;
-int edit_distance_tmp=0;
+int outbuf_distance = 0;
+int inbuf_distance = 0;
+int flag_byteflip=1;
+// u8 *global_inbuf,*global_outbuf;
 
 /* Get unix time in milliseconds */
 
@@ -1459,7 +1462,7 @@ static void read_testcases(void) {
   s32 nl_cnt;
   u32 i;
   u8* fn;
-  //get List
+  //W get List
   u8* cwd = getcwd(NULL, 0);
   u8* List_path = alloc_printf("%s/%s",cwd,List_name);
   char line[1000];
@@ -2344,84 +2347,165 @@ EXP_ST void init_forkserver(char** argv) {
 
 }
 
-int min(int x, int y)
-{
-    return x < y ? x : y;
-}
+// int min(int x, int y)
+// {
+//     return x < y ? x : y;
+// }
 
-int max(int x,int y)
-{
-    return x < y ? y : x;
-}
-//str_b should be the longer string
-int levenshtein_distance(char *str_a, char *str_b)
-{
-    int len_a,len_b;
-    len_a = strlen(str_a);
-    len_b = strlen(str_b);
-    if (len_a>len_b)
-    {
-        char *temp;
-        temp = str_a;
-        str_a = str_b;
-        str_b = temp;
+// int max(int x,int y)
+// {
+//     return x < y ? y : x;
+// }
+// //str_b should be the longer string
+// int levenshtein_distance(u8 *str_a, char *str_b)
+// {
+//     int len_a,len_b;
+//     len_a = strlen(str_a);
+//     len_b = strlen(str_b);
+//     if (len_a>len_b)
+//     {
+//         char *temp;
+//         temp = str_a;
+//         str_a = str_b;
+//         str_b = temp;
 
-        int tem;
-        tem = len_a;
-        len_a = len_b;
-        len_b = tem;
-    }
+//         int tem;
+//         tem = len_a;
+//         len_a = len_b;
+//         len_b = tem;
+//     }
     
-    int matrix[len_b+1][len_b+1];
-    int curr_i = 0;
-    int len_sub_a;
-    int len_sub_b;
-    int len_sub_a_b;
+//     int matrix[len_b+1][len_b+1];
+//     int curr_i = 0;
+//     int len_sub_a;
+//     int len_sub_b;
+//     int len_sub_a_b;
 
-    for (size_t i = 0; i < len_b+1; i++)
-    {
-        for (size_t j = 0; j < len_b+1; j++)
-        {
-            matrix[i][j]=0;
-        }
+//     for (size_t i = 0; i < len_b+1; i++)
+//     {
+//         for (size_t j = 0; j < len_b+1; j++)
+//         {
+//             matrix[i][j]=0;
+//         }
         
-    }
+//     }
     
 
-    for(size_t i = 0; i < len_a+1; i++)
-    {
-        for (size_t j = 0; j < len_b+1; j++)
-        {
-            if (min(i,j) == 0)
-            {
-                matrix[i][j] = max(i,j);
-                continue;
-            }
-            len_sub_a = matrix[1 - curr_i][j] + 1;
-            len_sub_b = matrix[curr_i][j - 1] + 1;
-            if (str_a[i - 1] != str_b[j - 1])
-            {
-                len_sub_a_b = matrix[1 - curr_i][j - 1] + 1;
-            }
-            else
-            {
-                len_sub_a_b = matrix[1 - curr_i][j - 1];
-            }
-            matrix[curr_i][j] = min(len_sub_a, min(len_sub_b, len_sub_a_b));
-        }
-        curr_i = 1 - curr_i;
+//     for(size_t i = 0; i < len_a+1; i++)
+//     {
+//         for (size_t j = 0; j < len_b+1; j++)
+//         {
+//             if (min(i,j) == 0)
+//             {
+//                 matrix[i][j] = max(i,j);
+//                 continue;
+//             }
+//             len_sub_a = matrix[1 - curr_i][j] + 1;
+//             len_sub_b = matrix[curr_i][j - 1] + 1;
+//             if (str_a[i - 1] != str_b[j - 1])
+//             {
+//                 len_sub_a_b = matrix[1 - curr_i][j - 1] + 1;
+//             }
+//             else
+//             {
+//                 len_sub_a_b = matrix[1 - curr_i][j - 1];
+//             }
+//             matrix[curr_i][j] = min(len_sub_a, min(len_sub_b, len_sub_a_b));
+//         }
+//         curr_i = 1 - curr_i;
+//     }
+
+//     return matrix[1 - curr_i][len_b];
+// }
+
+// int min( int i, int j){
+//     if (i<j){
+//         return i;
+//     }
+//     return j;
+// }
+// int min3( int i, int j, int k){
+//     return (min(i, min(j, k)));
+// }
+
+// int max( int i, int j){
+//     if (i>j){
+//         return i;
+//     }
+//     return j;
+// }
+
+// int levenshtein_distance(char a[], char b[], int i, int j){
+//     if (min(i+1,j+1)==0){
+//         return max(i+1,j+1);
+//     }
+//     int s = a[i] != b[j];
+//     int v1, v2, v3;
+//     v1 = levenshtein_distance(a,b,i-1,j) + 1;
+//     v2 = levenshtein_distance(a,b,i,j-1) + 1;
+//     v3 = levenshtein_distance(a,b,i-1,j-1) + s;
+//     return min3(v1, v2, v3);
+// }
+
+size_t levenshtein(const char *a, const char *b,const size_t length, const size_t bLength) {
+  // Shortcut optimizations / degenerate cases.
+  if (a == b) {
+    return 0;
+  }
+
+  if (length == 0) {
+    return bLength;
+  }
+
+  if (bLength == 0) {
+    return length;
+  }
+
+  size_t *cache = calloc(length, sizeof(size_t));
+  size_t index = 0;
+  size_t bIndex = 0;
+  size_t distance;
+  size_t bDistance;
+  size_t result;
+  char code;
+
+  // initialize the vector.
+  while (index < length) {
+    cache[index] = index + 1;
+    index++;
+  }
+
+  // Loop.
+  while (bIndex < bLength) {
+    code = b[bIndex];
+    result = distance = bIndex++;
+    index = SIZE_MAX;
+
+    while (++index < length) {
+      bDistance = code == a[index] ? distance : distance + 1;
+      distance = cache[index];
+
+      cache[index] = result = distance > result
+        ? bDistance > result
+          ? result + 1
+          : bDistance
+        : bDistance > distance
+          ? distance + 1
+          : bDistance;
     }
+  }
 
-    return matrix[1 - curr_i][len_b];
+  free(cache);
+
+  return result;
 }
-
 
 //Wh4lter
 //Levenshtein temporarily
-static int calc_edit_distance(char *new_result,char *ori_result)
+static int calc_edit_distance(u8 *new_result,u8 *ori_result)
 {
   
-  return levenshtein_distance(new_result,ori_result);
+  return levenshtein(new_result,ori_result,strlen(new_result),strlen(ori_result));
 }
 
 /* Execute target application, monitoring for timeouts. Return status
@@ -2654,22 +2738,15 @@ static u8 run_target(char** argv, u32 timeout) {
   }
 
   //Wh4lter
-  // char child_stderr[2048] = {0};
-  // read(fd2[0],child_stderr,2048);
-  // printf("child_PID:%d,STDERR:%s\n",child_pid,child_stderr);
   char result[1024] = {0};
-  // read(fd[0],result,1024);
   read(stdout_pipe[0],result,1024);
   result[strlen(result)-1]='\0';
   printf("\n##result:%s\n##right :%s\n",result,orig_trans);
-  // close(fd[0]);
-
-  // remove(fd);
-
   if (strcmp(result,orig_trans)&&strcmp(orig_trans," ")&&strlen(result)>1)
   {
-    edit_distance_tmp=calc_edit_distance(result,orig_trans);
-    printf("Translation Wrong! Leve's Distance:%d\n",edit_distance_tmp);
+    //output
+    outbuf_distance=calc_edit_distance(result,orig_trans);
+    printf("Translation Wrong! Leve's Distance:%d########\n",outbuf_distance);
     // fprintf(distance_f,"%d,",tmp);
     return FAULT_TRANS;
   }
@@ -3342,7 +3419,7 @@ static void write_crash_readme(void) {
    save or queue the input test case for further analysis if so. Returns 1 if
    entry is saved, 0 otherwise. */
 
-static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
+static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit_distance) {
 
   u8  *fn = "";
   u8  hnb;
@@ -3370,7 +3447,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
 #endif /* ^!SIMPLE_FILES */
 
-    add_to_queue(fn, len, 0,orig_trans,0);//TODO
+    add_to_queue(fn, len, 0,orig_trans,edit_distance);
 
     if (hnb == 2) {
       queue_top->has_new_cov = 1;
@@ -3507,11 +3584,13 @@ keep_as_crash:
       break;
 
     //Wh4lter
+    //TODO  add_to_queue with edit_distance updated
     case FAULT_TRANS:
       wrong_translations++;
-    fprintf(distance_f,"%d,",edit_distance_tmp);
+    fprintf(distance_f,"%d,",outbuf_distance);
 
       // printf("WRONG!!!!\n");
+      printf("input edit distance:%d#####\n",edit_distance);
       if (!dumb_mode) {
 #ifdef WORD_SIZE_64
         simplify_trace((u64*)trace_bits);
@@ -4009,6 +4088,16 @@ static void maybe_delete_out_dir(void) {
   fn = alloc_printf("%s/queue/.state/variable_behavior", out_dir);
   if (delete_files(fn, CASE_PREFIX)) goto dir_cleanup_failed;
   ck_free(fn);
+
+  //Wh4lter clean out_dir/mistakes and out_dir/edit_distance.txt
+  fn = alloc_printf("%s/edit_distance.txt", out_dir);
+  if (delete_files(fn, CASE_PREFIX)) goto dir_cleanup_failed;
+  ck_free(fn);
+
+  fn = alloc_printf("%s/mistakes", out_dir);
+  if (rmdir(fn) && errno != ENOENT) goto dir_cleanup_failed;
+  ck_free(fn);
+
 
   /* Then, get rid of the .state subdirectory itself (should be empty by now)
      and everything matching <out_dir>/queue/id:*. */
@@ -4863,12 +4952,12 @@ abort_trimming:
    error conditions, returning 1 if it's time to bail out. This is
    a helper function for fuzz_one(). */
 
-EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
+EXP_ST u8 common_fuzz_stuff(char** argv,u8* in_buf, u8* out_buf, u32 len,int edit_distance) {
 
   u8 fault;
 
-  if (post_handler) {
 
+  if (post_handler) {
     out_buf = post_handler(out_buf, &len);
     if (!out_buf || !len) return 0;
 
@@ -4887,7 +4976,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
       return 1;
     }
 
-  } else subseq_tmouts = 0;
+  }else subseq_tmouts = 0;
 
   /* Users can hit us with SIGUSR1 to request the current input
      to be abandoned. */
@@ -4902,7 +4991,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
 
   /* This handles FAULT_ERROR for us: */
 
-  queued_discovered += save_if_interesting(argv, out_buf, len, fault);
+  queued_discovered += save_if_interesting(argv, out_buf, len, fault,edit_distance);
 
   if (!(stage_cur % stats_update_freq) || stage_cur + 1 == stage_max)
     show_stats();
@@ -5211,6 +5300,13 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le) {
 
 }
 
+//Wh4lter
+//helper of my own mutation strategy
+static u8 wav_size_check(u8* out_buf,u8 len)
+{
+
+  return 0;
+}
 
 /* Take the current entry from the queue, fuzz it for a while. This
    function is a tad too long... returns 0 if fuzzed successfully, 1 if
@@ -5335,25 +5431,25 @@ static u8 fuzz_one(char** argv) {
    * TRIMMING *
    ************/
 
-  if (!dumb_mode && !queue_cur->trim_done) {
+  // if (!dumb_mode && !queue_cur->trim_done) {
 
-    u8 res = trim_case(argv, queue_cur, in_buf);
+  //   u8 res = trim_case(argv, queue_cur, in_buf);
 
-    if (res == FAULT_ERROR)
-      FATAL("Unable to execute target application");
+  //   if (res == FAULT_ERROR)
+  //     FATAL("Unable to execute target application");
 
-    if (stop_soon) {
-      cur_skipped_paths++;
-      goto abandon_entry;
-    }
+  //   if (stop_soon) {
+  //     cur_skipped_paths++;
+  //     goto abandon_entry;
+  //   }
 
-    /* Don't retry trimming, even if it failed. */
+  //   /* Don't retry trimming, even if it failed. */
 
-    queue_cur->trim_done = 1;
+  //   queue_cur->trim_done = 1;
 
-    if (len != queue_cur->len) len = queue_cur->len;
+  //   if (len != queue_cur->len) len = queue_cur->len;
 
-  }
+  // }
 
   memcpy(out_buf, in_buf, len);
 
@@ -5388,7 +5484,14 @@ static u8 fuzz_one(char** argv) {
     _arf[(_bf) >> 3] ^= (128 >> ((_bf) & 7)); \
   } while (0)
 
+
   /* Single walking bit. */
+
+if (flag_byteflip)
+{
+  goto byteflip;
+}
+
 
   stage_short = "flip1";
   stage_max   = len << 3;
@@ -5405,10 +5508,12 @@ static u8 fuzz_one(char** argv) {
     stage_cur_byte = stage_cur >> 3;
 
     FLIP_BIT(out_buf, stage_cur);
+    queue_cur->edit_distance+=1;
 
-    if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
 
     FLIP_BIT(out_buf, stage_cur);
+    queue_cur->edit_distance-=1;
 
     /* While flipping the least significant bit in every byte, pull of an extra
        trick to detect possible syntax tokens. In essence, the idea is that if
@@ -5498,11 +5603,13 @@ static u8 fuzz_one(char** argv) {
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
+    queue_cur->edit_distance+=2;
 
-    if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
+    queue_cur->edit_distance-=2;
 
   }
 
@@ -5527,14 +5634,15 @@ static u8 fuzz_one(char** argv) {
     FLIP_BIT(out_buf, stage_cur + 1);
     FLIP_BIT(out_buf, stage_cur + 2);
     FLIP_BIT(out_buf, stage_cur + 3);
+    queue_cur->edit_distance+=4;
 
-    if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
     FLIP_BIT(out_buf, stage_cur + 2);
     FLIP_BIT(out_buf, stage_cur + 3);
-
+    queue_cur->edit_distance-=4;
   }
 
   new_hit_cnt = queued_paths + unique_crashes;
@@ -5549,6 +5657,7 @@ static u8 fuzz_one(char** argv) {
      EFF_SPAN_ALEN - map span for a sequence of bytes.
 
    */
+byteflip:
 
 #define EFF_APOS(_p)          ((_p) >> EFF_MAP_SCALE2)
 #define EFF_REM(_x)           ((_x) & ((1 << EFF_MAP_SCALE2) - 1))
@@ -5579,8 +5688,8 @@ static u8 fuzz_one(char** argv) {
     stage_cur_byte = stage_cur;
 
     out_buf[stage_cur] ^= 0xFF;
-
-    if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+    queue_cur->edit_distance+=8;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
 
     /* We also use this stage to pull off a simple trick: we identify
        bytes that seem to have no effect on the current execution path
@@ -5607,6 +5716,7 @@ static u8 fuzz_one(char** argv) {
     }
 
     out_buf[stage_cur] ^= 0xFF;
+    queue_cur->edit_distance-=8;
 
   }
 
@@ -5657,11 +5767,13 @@ static u8 fuzz_one(char** argv) {
     stage_cur_byte = i;
 
     *(u16*)(out_buf + i) ^= 0xFFFF;
+    queue_cur->edit_distance+=16;
 
-    if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
     stage_cur++;
 
     *(u16*)(out_buf + i) ^= 0xFFFF;
+    queue_cur->edit_distance-=16;
 
 
   }
@@ -5694,11 +5806,12 @@ static u8 fuzz_one(char** argv) {
     stage_cur_byte = i;
 
     *(u32*)(out_buf + i) ^= 0xFFFFFFFF;
-
-    if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+    queue_cur->edit_distance+=32;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
     stage_cur++;
 
     *(u32*)(out_buf + i) ^= 0xFFFFFFFF;
+    queue_cur->edit_distance-=32;
 
   }
 
@@ -5750,8 +5863,9 @@ skip_bitflip:
 
         stage_cur_val = j;
         out_buf[i] = orig + j;
+        queue_cur->edit_distance+=8;
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
@@ -5763,12 +5877,13 @@ skip_bitflip:
         stage_cur_val = -j;
         out_buf[i] = orig - j;
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
 
       out_buf[i] = orig;
+      queue_cur->edit_distance-=8;
 
     }
 
@@ -5817,12 +5932,13 @@ skip_bitflip:
 
       stage_val_type = STAGE_VAL_LE; 
 
+      queue_cur->edit_distance+=16;
       if ((orig & 0xff) + j > 0xff && !could_be_bitflip(r1)) {
 
         stage_cur_val = j;
         *(u16*)(out_buf + i) = orig + j;
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
  
       } else stage_max--;
@@ -5832,7 +5948,7 @@ skip_bitflip:
         stage_cur_val = -j;
         *(u16*)(out_buf + i) = orig - j;
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
@@ -5847,7 +5963,7 @@ skip_bitflip:
         stage_cur_val = j;
         *(u16*)(out_buf + i) = SWAP16(SWAP16(orig) + j);
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
@@ -5857,12 +5973,13 @@ skip_bitflip:
         stage_cur_val = -j;
         *(u16*)(out_buf + i) = SWAP16(SWAP16(orig) - j);
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
 
       *(u16*)(out_buf + i) = orig;
+      queue_cur->edit_distance-=16;
 
     }
 
@@ -5909,13 +6026,14 @@ skip_bitflip:
          try if the operation would have effect on more than two bytes. */
 
       stage_val_type = STAGE_VAL_LE;
+      queue_cur->edit_distance+=32;
 
       if ((orig & 0xffff) + j > 0xffff && !could_be_bitflip(r1)) {
 
         stage_cur_val = j;
         *(u32*)(out_buf + i) = orig + j;
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
@@ -5925,7 +6043,7 @@ skip_bitflip:
         stage_cur_val = -j;
         *(u32*)(out_buf + i) = orig - j;
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
@@ -5939,7 +6057,7 @@ skip_bitflip:
         stage_cur_val = j;
         *(u32*)(out_buf + i) = SWAP32(SWAP32(orig) + j);
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
@@ -5949,12 +6067,13 @@ skip_bitflip:
         stage_cur_val = -j;
         *(u32*)(out_buf + i) = SWAP32(SWAP32(orig) - j);
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
 
       *(u32*)(out_buf + i) = orig;
+      queue_cur->edit_distance-=32;
 
     }
 
@@ -6007,11 +6126,12 @@ skip_arith:
 
       stage_cur_val = interesting_8[j];
       out_buf[i] = interesting_8[j];
-
-      if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+      queue_cur->edit_distance+=8;
+      if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
 
       out_buf[i] = orig;
       stage_cur++;
+      queue_cur->edit_distance-=8;
 
     }
 
@@ -6045,7 +6165,6 @@ skip_arith:
     }
 
     stage_cur_byte = i;
-
     for (j = 0; j < sizeof(interesting_16) / 2; j++) {
 
       stage_cur_val = interesting_16[j];
@@ -6061,7 +6180,8 @@ skip_arith:
 
         *(u16*)(out_buf + i) = interesting_16[j];
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        queue_cur->edit_distance+=16;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
@@ -6074,7 +6194,7 @@ skip_arith:
         stage_val_type = STAGE_VAL_BE;
 
         *(u16*)(out_buf + i) = SWAP16(interesting_16[j]);
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
@@ -6082,6 +6202,7 @@ skip_arith:
     }
 
     *(u16*)(out_buf + i) = orig;
+    queue_cur->edit_distance-=16;
 
   }
 
@@ -6118,9 +6239,9 @@ skip_arith:
     for (j = 0; j < sizeof(interesting_32) / 4; j++) {
 
       stage_cur_val = interesting_32[j];
-
       /* Skip if this could be a product of a bitflip, arithmetics,
          or word interesting value insertion. */
+      queue_cur->edit_distance+=32;
 
       if (!could_be_bitflip(orig ^ (u32)interesting_32[j]) &&
           !could_be_arith(orig, interesting_32[j], 4) &&
@@ -6130,7 +6251,7 @@ skip_arith:
 
         *(u32*)(out_buf + i) = interesting_32[j];
 
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
@@ -6143,7 +6264,7 @@ skip_arith:
         stage_val_type = STAGE_VAL_BE;
 
         *(u32*)(out_buf + i) = SWAP32(interesting_32[j]);
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
       } else stage_max--;
@@ -6151,6 +6272,7 @@ skip_arith:
     }
 
     *(u32*)(out_buf + i) = orig;
+    queue_cur->edit_distance-=32;
 
   }
 
@@ -6208,9 +6330,9 @@ skip_interest:
 
       last_len = extras[j].len;
       memcpy(out_buf + i, extras[j].data, last_len);
-
-      if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
-
+      queue_cur->edit_distance+=last_len;
+      if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+      queue_cur->edit_distance-=last_len;
       stage_cur++;
 
     }
@@ -6252,11 +6374,13 @@ skip_interest:
 
       /* Copy tail */
       memcpy(ex_tmp + i + extras[j].len, out_buf + i, len - i);
-
-      if (common_fuzz_stuff(argv, ex_tmp, len + extras[j].len)) {
+      
+      queue_cur->edit_distance+=extras[j].len;
+      if (common_fuzz_stuff(argv,orig_in, ex_tmp, len + extras[j].len,queue_cur->edit_distance)) {
         ck_free(ex_tmp);
         goto abandon_entry;
       }
+      queue_cur->edit_distance-=extras[j].len;
 
       stage_cur++;
 
@@ -6308,9 +6432,9 @@ skip_user_extras:
 
       last_len = a_extras[j].len;
       memcpy(out_buf + i, a_extras[j].data, last_len);
-
-      if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
-
+      queue_cur->edit_distance+=last_len;
+      if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+      queue_cur->edit_distance-=last_len;
       stage_cur++;
 
     }
@@ -6339,7 +6463,7 @@ skip_extras:
    ****************/
 
 havoc_stage:
-
+//#TODO 1. noise insertion;2. speed change;3. volume change
   stage_cur_byte = -1;
 
   /* The havoc stage mutation code is also invoked when splicing files; if the
@@ -6381,7 +6505,9 @@ havoc_stage:
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
 
     stage_cur_val = use_stacking;
- 
+
+    u32 dist_tmp=0;
+    // double orig_dist = queue_cur->edit_distance;
     for (i = 0; i < use_stacking; i++) {
 
       switch (UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0))) {
@@ -6391,6 +6517,7 @@ havoc_stage:
           /* Flip a single bit somewhere. Spooky! */
 
           FLIP_BIT(out_buf, UR(temp_len << 3));
+          dist_tmp+=1;
           break;
 
         case 1: 
@@ -6398,6 +6525,7 @@ havoc_stage:
           /* Set byte to interesting value. */
 
           out_buf[UR(temp_len)] = interesting_8[UR(sizeof(interesting_8))];
+          dist_tmp+=8;
           break;
 
         case 2:
@@ -6417,6 +6545,7 @@ havoc_stage:
               interesting_16[UR(sizeof(interesting_16) >> 1)]);
 
           }
+          dist_tmp+=16;
 
           break;
 
@@ -6437,6 +6566,7 @@ havoc_stage:
               interesting_32[UR(sizeof(interesting_32) >> 2)]);
 
           }
+          dist_tmp +=32;
 
           break;
 
@@ -6445,6 +6575,7 @@ havoc_stage:
           /* Randomly subtract from byte. */
 
           out_buf[UR(temp_len)] -= 1 + UR(ARITH_MAX);
+          dist_tmp+=8;
           break;
 
         case 5:
@@ -6452,6 +6583,7 @@ havoc_stage:
           /* Randomly add to byte. */
 
           out_buf[UR(temp_len)] += 1 + UR(ARITH_MAX);
+          dist_tmp+=8;
           break;
 
         case 6:
@@ -6475,6 +6607,7 @@ havoc_stage:
               SWAP16(SWAP16(*(u16*)(out_buf + pos)) - num);
 
           }
+          dist_tmp+=16;
 
           break;
 
@@ -6499,7 +6632,7 @@ havoc_stage:
               SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
 
           }
-
+          dist_tmp+=16;
           break;
 
         case 8:
@@ -6523,7 +6656,7 @@ havoc_stage:
               SWAP32(SWAP32(*(u32*)(out_buf + pos)) - num);
 
           }
-
+          dist_tmp+=32;
           break;
 
         case 9:
@@ -6547,7 +6680,7 @@ havoc_stage:
               SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
 
           }
-
+          dist_tmp+=32;
           break;
 
         case 10:
@@ -6581,7 +6714,7 @@ havoc_stage:
             temp_len -= del_len;
 
             break;
-
+            dist_tmp+=del_len;
           }
 
         case 13:
@@ -6630,8 +6763,8 @@ havoc_stage:
             out_buf = new_buf;
             temp_len += clone_len;
 
+          dist_tmp+=clone_len;
           }
-
           break;
 
         case 14: {
@@ -6655,7 +6788,7 @@ havoc_stage:
 
             } else memset(out_buf + copy_to,
                           UR(2) ? UR(256) : out_buf[UR(temp_len)], copy_len);
-
+            dist_tmp+=copy_len;
             break;
 
           }
@@ -6680,6 +6813,7 @@ havoc_stage:
 
               insert_at = UR(temp_len - extra_len + 1);
               memcpy(out_buf + insert_at, a_extras[use_extra].data, extra_len);
+              dist_tmp+=extra_len;
 
             } else {
 
@@ -6693,6 +6827,7 @@ havoc_stage:
 
               insert_at = UR(temp_len - extra_len + 1);
               memcpy(out_buf + insert_at, extras[use_extra].data, extra_len);
+              dist_tmp+=extra_len;
 
             }
 
@@ -6722,6 +6857,8 @@ havoc_stage:
 
               /* Inserted part */
               memcpy(new_buf + insert_at, a_extras[use_extra].data, extra_len);
+              dist_tmp+=extra_len;
+
 
             } else {
 
@@ -6737,6 +6874,8 @@ havoc_stage:
 
               /* Inserted part */
               memcpy(new_buf + insert_at, extras[use_extra].data, extra_len);
+              dist_tmp+=extra_len;
+
 
             }
 
@@ -6755,9 +6894,10 @@ havoc_stage:
       }
 
     }
-
-    if (common_fuzz_stuff(argv, out_buf, temp_len))
+    queue_cur->edit_distance+=dist_tmp;
+    if (common_fuzz_stuff(argv,orig_in, out_buf, temp_len,queue_cur->edit_distance))
       goto abandon_entry;
+    queue_cur->edit_distance-=dist_tmp;
 
     /* out_buf might have been mangled a bit, so let's restore it to its
        original size and shape. */
@@ -7022,7 +7162,7 @@ static void sync_fuzzers(char** argv) {
         if (stop_soon) return;
 
         syncing_party = sd_ent->d_name;
-        queued_imported += save_if_interesting(argv, mem, st.st_size, fault);
+        queued_imported += save_if_interesting(argv, mem, st.st_size, fault,queue_cur->edit_distance);
         syncing_party = 0;
 
         munmap(mem, st.st_size);
