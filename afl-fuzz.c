@@ -355,6 +355,7 @@ enum {
 
 //Wh4lter declared
 FILE *distance_f;
+FILE *distance_input_f;
 int outbuf_distance = 0;
 int inbuf_distance = 0;
 int flag_byteflip=1;
@@ -2746,7 +2747,6 @@ static u8 run_target(char** argv, u32 timeout) {
   {
     //output
     outbuf_distance=calc_edit_distance(result,orig_trans);
-    printf("Translation Wrong! Leve's Distance:%d########\n",outbuf_distance);
     // fprintf(distance_f,"%d,",tmp);
     return FAULT_TRANS;
   }
@@ -3590,7 +3590,10 @@ keep_as_crash:
     fprintf(distance_f,"%d,",outbuf_distance);
 
       // printf("WRONG!!!!\n");
-      printf("input edit distance:%d#####\n",edit_distance);
+    printf("output edit distance:%d########\n",outbuf_distance);
+    printf("input edit distance :%d########\n",edit_distance);
+    fprintf(distance_input_f,"%d,",edit_distance);
+    
       if (!dumb_mode) {
 #ifdef WORD_SIZE_64
         simplify_trace((u64*)trace_bits);
@@ -5431,25 +5434,25 @@ static u8 fuzz_one(char** argv) {
    * TRIMMING *
    ************/
 
-  // if (!dumb_mode && !queue_cur->trim_done) {
+  if (!dumb_mode && !queue_cur->trim_done) {
 
-  //   u8 res = trim_case(argv, queue_cur, in_buf);
+    u8 res = trim_case(argv, queue_cur, in_buf);
 
-  //   if (res == FAULT_ERROR)
-  //     FATAL("Unable to execute target application");
+    if (res == FAULT_ERROR)
+      FATAL("Unable to execute target application");
 
-  //   if (stop_soon) {
-  //     cur_skipped_paths++;
-  //     goto abandon_entry;
-  //   }
+    if (stop_soon) {
+      cur_skipped_paths++;
+      goto abandon_entry;
+    }
 
-  //   /* Don't retry trimming, even if it failed. */
+    /* Don't retry trimming, even if it failed. */
 
-  //   queue_cur->trim_done = 1;
+    queue_cur->trim_done = 1;
 
-  //   if (len != queue_cur->len) len = queue_cur->len;
+    if (len != queue_cur->len) len = queue_cur->len;
 
-  // }
+  }
 
   memcpy(out_buf, in_buf, len);
 
@@ -7608,9 +7611,10 @@ EXP_ST void setup_dirs_fds(void) {
   if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
   ck_free(tmp);
 //not dir but files
-  tmp = alloc_printf("%s/edit_distance.txt", out_dir);
+  tmp = alloc_printf("%s/out_edit_distance.txt", out_dir);
   distance_f = fopen(tmp,"w");
-
+  tmp = alloc_printf("%s/input_edit_distance.txt", out_dir);
+  distance_input_f = fopen(tmp,"w");
   /* All recorded hangs. */
 
   tmp = alloc_printf("%s/hangs", out_dir);

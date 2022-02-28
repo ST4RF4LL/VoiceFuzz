@@ -83,6 +83,32 @@ int levenshtein_distance(char *str_a, char *str_b)
 
 int main(int argc, char const *argv[])
 {
-    printf("%d",levenshtein_distance(argv[1],argv[2]));
+    FILE *f1,*f2;
+    // char *WAV1,*WAV2;
+    char WAV1[66958]={0},WAV2[32302]={0};
+    char c;
+    // WAV1 = malloc(sizeof(char)*66958);
+    // WAV2 = malloc(sizeof(char)*32302);
+    f1 = fopen("./0000.wav","rb");
+    f2 = fopen("./0000_x2.wav","rb");
+    for(int i=0;i<66958;i++)
+    {
+        WAV1[i]=fgetc(f1);
+        // printf("%x",c);
+        // WAV1[i]=c;
+
+    }
+    for(int i=0;i<32302;i++)
+    {
+        WAV2[i]=fgetc(f2);
+    }
+
+    // for(int i=0;i<66958;i++)
+    // {
+    //     printf("%x",WAV1[i]);
+
+    // }
+
+    printf("%d",levenshtein_distance(WAV1,WAV2));
     return 0;
 }
