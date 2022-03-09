@@ -359,6 +359,7 @@ FILE *distance_input_f;
 int outbuf_distance = 0;
 int inbuf_distance = 0;
 int flag_byteflip=1;
+int wrong_flag = 0;
 // u8 *global_inbuf,*global_outbuf;
 
 /* Get unix time in milliseconds */
@@ -4897,6 +4898,19 @@ EXP_ST u8 common_fuzz_stuff(char** argv,u8* in_buf, u8* out_buf, u32 len,int edi
 
   }else subseq_tmouts = 0;
 
+  if (fault == FAULT_TRANS)
+  {
+    wrong_flag = 1;
+  }else
+  {
+    wrong_flag = 0;
+  }
+  
+  {
+    /* code */
+  }
+  
+
   /* Users can hit us with SIGUSR1 to request the current input
      to be abandoned. */
 
@@ -5227,6 +5241,15 @@ static u8 wav_size_check(u8* out_buf,u8 len)
   return 0;
 }
 
+//helper to update the ex_eff_map
+//pos is aligned with 2bytes
+static u8 update_eff(u16* eff_map,u16 pos,u16 tc_diff_value)
+{
+  u16 eff_value=eff_map[pos];
+  eff_map[pos]=min(eff_value,tc_diff_value);
+  return 1;
+
+}
 
 
 /* Take the current entry from the queue, fuzz it for a while. This
@@ -5236,7 +5259,8 @@ static u8 wav_size_check(u8* out_buf,u8 len)
 static u8 fuzz_one(char** argv) {
 
   s32 len, fd, temp_len, i, j;
-  u8  *in_buf, *out_buf, *orig_in, *ex_tmp, *eff_map = 0,*ex_eff_map = 0;
+  u8  *in_buf, *out_buf, *orig_in, *ex_tmp,*ex_eff_map = 0;
+  u16* eff_map;
   u64 havoc_queued,  orig_hit_cnt, new_hit_cnt;
   u32 splice_cycle = 0, perf_score = 100, orig_perf, prev_cksum, eff_cnt = 1;
 
@@ -5395,8 +5419,42 @@ static u8 fuzz_one(char** argv) {
 
   doing_det = 1;
 
+//Wh4lter
+//eff_map -> ex_eff_map
+#define EFF_APOS(_p)          ((_p) >> EFF_MAP_SCALE2)
+#define EFF_REM(_x)           ((_x) & ((1 << EFF_MAP_SCALE2) - 1))
+#define EFF_ALEN(_l)          (EFF_APOS(_l) + !!EFF_REM(_l))
+#define EFF_SPAN_ALEN(_p, _l) (EFF_APOS((_p) + (_l) - 1) - EFF_APOS(_p) + 1)
+  /* Effector map setup. These macros calculate:
+
+     EFF_APOS      - position of a particular file offset in the map.
+     EFF_ALEN      - length of a map with a particular number of bytes.
+     EFF_SPAN_ALEN - map span for a sequence of bytes.
+
+   */
+
+  // eff_map    = ck_alloc(EFF_ALEN(len/2));
+  eff_map = malloc(sizeof(u16)*(len/2));
+  // eff_map[0] = 1;
+  for (size_t i = 0; i < 0x4E/2; i++)
+  {
+    eff_map[i]=0x0000;
+  }
+  for (size_t i = 0x4E; i < len; i++)
+  {
+    eff_map[i]=0xFFFF;
+  }
+  
+  
+  // ex_eff_map = ck_alloc(EFF_ALEN(len));
+
+  // if (EFF_APOS(len - 1) != 0) {
+  //   eff_map[EFF_APOS(len - 1)] = 1;
+  //   eff_cnt++;
+  // }
+
   /*********************************************
-   * SIMPLE BITFLIP (+dictionary construction) *
+   * 16bits                                    *
    *********************************************/
 
 #define FLIP_BIT(_ar, _b) do { \
@@ -5406,272 +5464,7 @@ static u8 fuzz_one(char** argv) {
   } while (0)
 
 
-  /* Single walking bit. */
-
-if (flag_byteflip)
-{
-  goto flip8;
-}
-
-
-  stage_short = "flip1";
-  stage_max   = len << 3;
-  stage_name  = "bitflip 1/1";
-
-  stage_val_type = STAGE_VAL_NONE;
-
-  orig_hit_cnt = queued_paths + unique_crashes;
-
-  prev_cksum = queue_cur->exec_cksum;
-
-  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-
-    stage_cur_byte = stage_cur >> 3;
-
-    FLIP_BIT(out_buf, stage_cur);
-    queue_cur->edit_distance+=1;
-
-    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-
-    FLIP_BIT(out_buf, stage_cur);
-    queue_cur->edit_distance-=1;
-
-    /* While flipping the least significant bit in every byte, pull of an extra
-       trick to detect possible syntax tokens. In essence, the idea is that if
-       you have a binary blob like this:
-
-       xxxxxxxxIHDRxxxxxxxx
-
-       ...and changing the leading and trailing bytes causes variable or no
-       changes in program flow, but touching any character in the "IHDR" string
-       always produces the same, distinctive path, it's highly likely that
-       "IHDR" is an atomically-checked magic value of special significance to
-       the fuzzed format.
-
-       We do this here, rather than as a separate stage, because it's a nice
-       way to keep the operation approximately "free" (i.e., no extra execs).
-       
-       Empirically, performing the check when flipping the least significant bit
-       is advantageous, compared to doing it at the time of more disruptive
-       changes, where the program flow may be affected in more violent ways.
-
-       The caveat is that we won't generate dictionaries in the -d mode or -S
-       mode - but that's probably a fair trade-off.
-
-       This won't work particularly well with paths that exhibit variable
-       behavior, but fails gracefully, so we'll carry out the checks anyway.
-
-      */
-
-    if (!dumb_mode && (stage_cur & 7) == 7) {
-
-      u32 cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-
-      if (stage_cur == stage_max - 1 && cksum == prev_cksum) {
-
-        /* If at end of file and we are still collecting a string, grab the
-           final character and force output. */
-
-        if (a_len < MAX_AUTO_EXTRA) a_collect[a_len] = out_buf[stage_cur >> 3];
-        a_len++;
-
-        if (a_len >= MIN_AUTO_EXTRA && a_len <= MAX_AUTO_EXTRA)
-          maybe_add_auto(a_collect, a_len);
-
-      } else if (cksum != prev_cksum) {
-
-        /* Otherwise, if the checksum has changed, see if we have something
-           worthwhile queued up, and collect that if the answer is yes. */
-
-        if (a_len >= MIN_AUTO_EXTRA && a_len <= MAX_AUTO_EXTRA)
-          maybe_add_auto(a_collect, a_len);
-
-        a_len = 0;
-        prev_cksum = cksum;
-
-      }
-
-      /* Continue collecting string, but only if the bit flip actually made
-         any difference - we don't want no-op tokens. */
-
-      if (cksum != queue_cur->exec_cksum) {
-
-        if (a_len < MAX_AUTO_EXTRA) a_collect[a_len] = out_buf[stage_cur >> 3];        
-        a_len++;
-
-      }
-
-    }
-
-  }
-
-  new_hit_cnt = queued_paths + unique_crashes;
-
-  stage_finds[STAGE_FLIP1]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_FLIP1] += stage_max;
-
-  /* Two walking bits. */
-
-  stage_name  = "bitflip 2/1";
-  stage_short = "flip2";
-  stage_max   = (len << 3) - 1;
-
-  orig_hit_cnt = new_hit_cnt;
-
-  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-
-    stage_cur_byte = stage_cur >> 3;
-
-    FLIP_BIT(out_buf, stage_cur);
-    FLIP_BIT(out_buf, stage_cur + 1);
-    queue_cur->edit_distance+=2;
-
-    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-
-    FLIP_BIT(out_buf, stage_cur);
-    FLIP_BIT(out_buf, stage_cur + 1);
-    queue_cur->edit_distance-=2;
-
-  }
-
-  new_hit_cnt = queued_paths + unique_crashes;
-
-  stage_finds[STAGE_FLIP2]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_FLIP2] += stage_max;
-
-  /* Four walking bits. */
-
-  stage_name  = "bitflip 4/1";
-  stage_short = "flip4";
-  stage_max   = (len << 3) - 3;
-
-  orig_hit_cnt = new_hit_cnt;
-
-  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-
-    stage_cur_byte = stage_cur >> 3;
-
-    FLIP_BIT(out_buf, stage_cur);
-    FLIP_BIT(out_buf, stage_cur + 1);
-    FLIP_BIT(out_buf, stage_cur + 2);
-    FLIP_BIT(out_buf, stage_cur + 3);
-    queue_cur->edit_distance+=4;
-
-    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-
-    FLIP_BIT(out_buf, stage_cur);
-    FLIP_BIT(out_buf, stage_cur + 1);
-    FLIP_BIT(out_buf, stage_cur + 2);
-    FLIP_BIT(out_buf, stage_cur + 3);
-    queue_cur->edit_distance-=4;
-  }
-
-  new_hit_cnt = queued_paths + unique_crashes;
-
-  stage_finds[STAGE_FLIP4]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_FLIP4] += stage_max;
-
-  /* Effector map setup. These macros calculate:
-
-     EFF_APOS      - position of a particular file offset in the map.
-     EFF_ALEN      - length of a map with a particular number of bytes.
-     EFF_SPAN_ALEN - map span for a sequence of bytes.
-
-   */
-flip8:
-
-#define EFF_APOS(_p)          ((_p) >> EFF_MAP_SCALE2)
-#define EFF_REM(_x)           ((_x) & ((1 << EFF_MAP_SCALE2) - 1))
-#define EFF_ALEN(_l)          (EFF_APOS(_l) + !!EFF_REM(_l))
-#define EFF_SPAN_ALEN(_p, _l) (EFF_APOS((_p) + (_l) - 1) - EFF_APOS(_p) + 1)
-
-  /* Initialize effector map for the next step (see comments below). Always
-     flag first and last byte as doing something. */
-
-  eff_map    = ck_alloc(EFF_ALEN(len));
-  eff_map[0] = 1;
-
-  //Wh4lter
-  ex_eff_map = ck_alloc(EFF_ALEN(len));
-
-
-  if (EFF_APOS(len - 1) != 0) {
-    eff_map[EFF_APOS(len - 1)] = 1;
-    eff_cnt++;
-  }
-
-  /* Walking byte. */
-
-  stage_name  = "bitflip 8/8";
-  stage_short = "flip8";
-  stage_max   = len;
-
-  orig_hit_cnt = new_hit_cnt;
-
-  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-
-    stage_cur_byte = stage_cur;
-
-    out_buf[stage_cur] ^= 0xFF;
-    queue_cur->edit_distance+=8;
-    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-
-    /* We also use this stage to pull off a simple trick: we identify
-       bytes that seem to have no effect on the current execution path
-       even when fully flipped - and we skip them during more expensive
-       deterministic stages, such as arithmetics or known ints. */
-
-    if (!eff_map[EFF_APOS(stage_cur)]) {
-
-      u32 cksum;
-
-      /* If in dumb mode or if the file is very short, just flag everything
-         without wasting time on checksums. */
-
-      if (!dumb_mode && len >= EFF_MIN_LEN)
-        cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-      else
-        cksum = ~queue_cur->exec_cksum;
-
-      if (cksum != queue_cur->exec_cksum) {
-        eff_map[EFF_APOS(stage_cur)] = 1;
-        eff_cnt++;
-      }
-
-    }
-
-    out_buf[stage_cur] ^= 0xFF;
-    queue_cur->edit_distance-=8;
-
-  }
-
-  /* If the effector map is more than EFF_MAX_PERC dense, just flag the
-     whole thing as worth fuzzing, since we wouldn't be saving much time
-     anyway. */
-
-  if (eff_cnt != EFF_ALEN(len) &&
-      eff_cnt * 100 / EFF_ALEN(len) > EFF_MAX_PERC) {
-
-    memset(eff_map, 1, EFF_ALEN(len));
-
-    blocks_eff_select += EFF_ALEN(len);
-
-  } else {
-
-    blocks_eff_select += eff_cnt;
-
-  }
-
-  blocks_eff_total += EFF_ALEN(len);
-
-  new_hit_cnt = queued_paths + unique_crashes;
-
-  stage_finds[STAGE_FLIP8]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_FLIP8] += stage_max;
-
   /* Two walking bytes. */
-
-  if (len < 2) goto skip_bitflip;
 
   stage_name  = "bitflip 16/8";
   stage_short = "flip16";
@@ -5679,17 +5472,22 @@ flip8:
   stage_max   = len - 1;
 
   orig_hit_cnt = new_hit_cnt;
-
   for (i = 0; i < len - 1; i++) {
 
     /* Let's consult the effector map... */
 
-    if (!eff_map[EFF_APOS(i)] && !eff_map[EFF_APOS(i + 1)]) {
-      stage_max--;
-      continue;
-    }
+    // if (!eff_map[EFF_APOS(i)] && !eff_map[EFF_APOS(i + 1)]) {
+    //   stage_max--;
+    //   continue;
+    // }
 
     stage_cur_byte = i;
+
+    if (!eff_map[stage_cur_byte/2])
+    {
+      stage_max -= 1;
+      continue;
+    }
 
     *(u16*)(out_buf + i) ^= 0xFFFF;
     queue_cur->edit_distance+=16;
@@ -5701,6 +5499,9 @@ flip8:
     queue_cur->edit_distance-=16;
 
 
+  if (wrong_flag)update_eff(eff_map,stage_cur_byte/2,abs(*(u16*)(out_buf + i)-*(u16*)(out_buf + i) ^ 0xFFFF));
+  
+
   }
 
   new_hit_cnt = queued_paths + unique_crashes;
@@ -5708,8 +5509,204 @@ flip8:
   stage_finds[STAGE_FLIP16]  += new_hit_cnt - orig_hit_cnt;
   stage_cycles[STAGE_FLIP16] += stage_max;
 
-  if (len < 4) goto skip_bitflip;
 
+//
+
+ /* 16-bit arithmetics, both endians. */
+
+  if (len < 2) goto skip_arith;
+
+  stage_name  = "arith 16/8";
+  stage_short = "arith16";
+  stage_cur   = 0;
+  stage_max   = 4 * (len - 1) * ARITH_MAX;
+
+  orig_hit_cnt = new_hit_cnt;
+
+  for (i = 0; i < len - 1; i++) {
+
+    u16 orig = *(u16*)(out_buf + i);
+
+    /* Let's consult the effector map... */
+
+
+    stage_cur_byte = i;
+    if (!eff_map[stage_cur_byte/2]) {
+      stage_max -= 4 * ARITH_MAX;
+      continue;
+    }
+
+    for (j = 1; j <= ARITH_MAX; j++) {
+
+      u16 r1 = orig ^ (orig + j),
+          r2 = orig ^ (orig - j),
+          r3 = orig ^ SWAP16(SWAP16(orig) + j),
+          r4 = orig ^ SWAP16(SWAP16(orig) - j);
+
+
+      stage_val_type = STAGE_VAL_LE; 
+
+      queue_cur->edit_distance+=16;
+      if ((orig & 0xff) + j > 0xff && !could_be_bitflip(r1)) {
+
+        stage_cur_val = j;
+        *(u16*)(out_buf + i) = orig + j;
+
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        stage_cur++;
+
+        if (wrong_flag)update(eff_map,stage_cur_byte/2,j);
+        // {
+        //   eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],stage_cur_val);
+        // }
+ 
+      } else stage_max--;
+
+      if ((orig & 0xff) < j && !could_be_bitflip(r2)) {
+
+        stage_cur_val = -j;
+        *(u16*)(out_buf + i) = orig - j;
+
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        stage_cur++;
+
+        if (wrong_flag)update(eff_map,stage_cur_byte/2,j);
+        // {
+        //   eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],stage_cur_val);
+        // }
+
+      } else stage_max--;
+
+      /* Big endian comes next. Same deal. */
+
+      stage_val_type = STAGE_VAL_BE;
+
+
+      if ((orig >> 8) + j > 0xff && !could_be_bitflip(r3)) {
+
+        stage_cur_val = j;
+        *(u16*)(out_buf + i) = SWAP16(SWAP16(orig) + j);
+
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        stage_cur++;
+        if (wrong_flag)
+        {
+          eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],stage_cur_val);
+        }
+
+      } else stage_max--;
+
+      if ((orig >> 8) < j && !could_be_bitflip(r4)) {
+
+        stage_cur_val = -j;
+        *(u16*)(out_buf + i) = SWAP16(SWAP16(orig) - j);
+
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        stage_cur++;
+        if (wrong_flag)
+        {
+          eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],stage_cur_val);
+        }
+
+      } else stage_max--;
+
+      *(u16*)(out_buf + i) = orig;
+      queue_cur->edit_distance-=16;
+
+    }
+
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_ARITH16]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_ARITH16] += stage_max;
+//
+
+  /* Setting 16-bit integers, both endians. */
+
+  if (no_arith || len < 2) goto skip_interest;
+
+  stage_name  = "interest 16/8";
+  stage_short = "int16";
+  stage_cur   = 0;
+  stage_max   = 2 * (len - 1) * (sizeof(interesting_16) >> 1);
+
+  orig_hit_cnt = new_hit_cnt;
+
+  for (i = 0; i < len - 1; i++) {
+
+    u16 orig = *(u16*)(out_buf + i);
+
+    /* Let's consult the effector map... */
+
+    if (!eff_map[EFF_APOS(i/2)]) {
+      stage_max -= sizeof(interesting_16);
+      continue;
+    }
+
+    stage_cur_byte = i;
+    queue_cur->edit_distance+=16;
+    for (j = 0; j < sizeof(interesting_16) / 2; j++) {
+
+      stage_cur_val = interesting_16[j];
+
+      /* Skip if this could be a product of a bitflip, arithmetics,
+         or single-byte interesting value insertion. */
+
+      if (!could_be_bitflip(orig ^ (u16)interesting_16[j]) &&
+          !could_be_arith(orig, (u16)interesting_16[j], 2) &&
+          !could_be_interest(orig, (u16)interesting_16[j], 2, 0)) {
+
+        stage_val_type = STAGE_VAL_LE;
+
+        *(u16*)(out_buf + i) = interesting_16[j];
+
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        stage_cur++;
+
+        if (wrong_flag)
+        {
+          eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],abs(eff_map[EFF_APOS(stage_cur)/2]-(u16)interesting_16[j]));
+        }
+
+      } else stage_max--;
+
+      if ((u16)interesting_16[j] != SWAP16(interesting_16[j]) &&
+          !could_be_bitflip(orig ^ SWAP16(interesting_16[j])) &&
+          !could_be_arith(orig, SWAP16(interesting_16[j]), 2) &&
+          !could_be_interest(orig, SWAP16(interesting_16[j]), 2, 1)) {
+
+        stage_val_type = STAGE_VAL_BE;
+
+        *(u16*)(out_buf + i) = SWAP16(interesting_16[j]);
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        stage_cur++;
+
+        if (wrong_flag)
+        {
+          eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],abs(eff_map[EFF_APOS(stage_cur)/2]-SWAP16(interesting_16[j])));
+        }
+
+      } else stage_max--;
+
+    }
+
+    *(u16*)(out_buf + i) = orig;
+    queue_cur->edit_distance-=16;
+
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_INTEREST16]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_INTEREST16] += stage_max;
+
+  if (len < 4) goto skip_interest;
+  //
+
+
+//now using ex_eff_map
   /* Four walking bytes. */
 
   stage_name  = "bitflip 32/8";
@@ -5744,176 +5741,8 @@ flip8:
 
   stage_finds[STAGE_FLIP32]  += new_hit_cnt - orig_hit_cnt;
   stage_cycles[STAGE_FLIP32] += stage_max;
+//
 
-skip_bitflip:
-
-  if (no_arith) goto skip_arith;
-
-  /**********************
-   * ARITHMETIC INC/DEC *
-   **********************/
-
-  /* 8-bit arithmetics. */
-
-  stage_name  = "arith 8/8";
-  stage_short = "arith8";
-  stage_cur   = 0;
-  stage_max   = 2 * len * ARITH_MAX;
-
-  stage_val_type = STAGE_VAL_LE;
-
-  orig_hit_cnt = new_hit_cnt;
-
-  for (i = 0; i < len; i++) {
-
-    u8 orig = out_buf[i];
-
-    /* Let's consult the effector map... */
-
-    if (!eff_map[EFF_APOS(i)]) {
-      stage_max -= 2 * ARITH_MAX;
-      continue;
-    }
-
-    stage_cur_byte = i;
-
-    for (j = 1; j <= ARITH_MAX; j++) {
-
-      u8 r = orig ^ (orig + j);
-
-      /* Do arithmetic operations only if the result couldn't be a product
-         of a bitflip. */
-
-      queue_cur->edit_distance+=8;
-      if (!could_be_bitflip(r)) {
-
-        stage_cur_val = j;
-        out_buf[i] = orig + j;
-
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-        stage_cur++;
-
-      } else stage_max--;
-
-      r =  orig ^ (orig - j);
-
-      if (!could_be_bitflip(r)) {
-
-        stage_cur_val = -j;
-        out_buf[i] = orig - j;
-
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-        stage_cur++;
-
-      } else stage_max--;
-
-      out_buf[i] = orig;
-      queue_cur->edit_distance-=8;
-
-    }
-
-  }
-
-  new_hit_cnt = queued_paths + unique_crashes;
-
-  stage_finds[STAGE_ARITH8]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_ARITH8] += stage_max;
-
-  /* 16-bit arithmetics, both endians. */
-
-  if (len < 2) goto skip_arith;
-
-  stage_name  = "arith 16/8";
-  stage_short = "arith16";
-  stage_cur   = 0;
-  stage_max   = 4 * (len - 1) * ARITH_MAX;
-
-  orig_hit_cnt = new_hit_cnt;
-
-  for (i = 0; i < len - 1; i++) {
-
-    u16 orig = *(u16*)(out_buf + i);
-
-    /* Let's consult the effector map... */
-
-    if (!eff_map[EFF_APOS(i)] && !eff_map[EFF_APOS(i + 1)]) {
-      stage_max -= 4 * ARITH_MAX;
-      continue;
-    }
-
-    stage_cur_byte = i;
-
-    for (j = 1; j <= ARITH_MAX; j++) {
-
-      u16 r1 = orig ^ (orig + j),
-          r2 = orig ^ (orig - j),
-          r3 = orig ^ SWAP16(SWAP16(orig) + j),
-          r4 = orig ^ SWAP16(SWAP16(orig) - j);
-
-      /* Try little endian addition and subtraction first. Do it only
-         if the operation would affect more than one byte (hence the 
-         & 0xff overflow checks) and if it couldn't be a product of
-         a bitflip. */
-
-      stage_val_type = STAGE_VAL_LE; 
-
-      queue_cur->edit_distance+=16;
-      if ((orig & 0xff) + j > 0xff && !could_be_bitflip(r1)) {
-
-        stage_cur_val = j;
-        *(u16*)(out_buf + i) = orig + j;
-
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-        stage_cur++;
- 
-      } else stage_max--;
-
-      if ((orig & 0xff) < j && !could_be_bitflip(r2)) {
-
-        stage_cur_val = -j;
-        *(u16*)(out_buf + i) = orig - j;
-
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-        stage_cur++;
-
-      } else stage_max--;
-
-      /* Big endian comes next. Same deal. */
-
-      stage_val_type = STAGE_VAL_BE;
-
-
-      if ((orig >> 8) + j > 0xff && !could_be_bitflip(r3)) {
-
-        stage_cur_val = j;
-        *(u16*)(out_buf + i) = SWAP16(SWAP16(orig) + j);
-
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-        stage_cur++;
-
-      } else stage_max--;
-
-      if ((orig >> 8) < j && !could_be_bitflip(r4)) {
-
-        stage_cur_val = -j;
-        *(u16*)(out_buf + i) = SWAP16(SWAP16(orig) - j);
-
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-        stage_cur++;
-
-      } else stage_max--;
-
-      *(u16*)(out_buf + i) = orig;
-      queue_cur->edit_distance-=16;
-
-    }
-
-  }
-
-  new_hit_cnt = queued_paths + unique_crashes;
-
-  stage_finds[STAGE_ARITH16]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_ARITH16] += stage_max;
 
   /* 32-bit arithmetics, both endians. */
 
@@ -6008,135 +5837,8 @@ skip_bitflip:
 
   stage_finds[STAGE_ARITH32]  += new_hit_cnt - orig_hit_cnt;
   stage_cycles[STAGE_ARITH32] += stage_max;
+  //
 
-skip_arith:
-
-  /**********************
-   * INTERESTING VALUES *
-   **********************/
-
-  stage_name  = "interest 8/8";
-  stage_short = "int8";
-  stage_cur   = 0;
-  stage_max   = len * sizeof(interesting_8);
-
-  stage_val_type = STAGE_VAL_LE;
-
-  orig_hit_cnt = new_hit_cnt;
-
-  /* Setting 8-bit integers. */
-
-  for (i = 0; i < len; i++) {
-
-    u8 orig = out_buf[i];
-
-    /* Let's consult the effector map... */
-
-    if (!eff_map[EFF_APOS(i)]) {
-      stage_max -= sizeof(interesting_8);
-      continue;
-    }
-
-    stage_cur_byte = i;
-
-    for (j = 0; j < sizeof(interesting_8); j++) {
-
-      /* Skip if the value could be a product of bitflips or arithmetics. */
-
-      if (could_be_bitflip(orig ^ (u8)interesting_8[j]) ||
-          could_be_arith(orig, (u8)interesting_8[j], 1)) {
-        stage_max--;
-        continue;
-      }
-
-      stage_cur_val = interesting_8[j];
-      out_buf[i] = interesting_8[j];
-      queue_cur->edit_distance+=8;
-      if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-
-      out_buf[i] = orig;
-      stage_cur++;
-      queue_cur->edit_distance-=8;
-
-    }
-
-  }
-
-  new_hit_cnt = queued_paths + unique_crashes;
-
-  stage_finds[STAGE_INTEREST8]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_INTEREST8] += stage_max;
-
-  /* Setting 16-bit integers, both endians. */
-
-  if (no_arith || len < 2) goto skip_interest;
-
-  stage_name  = "interest 16/8";
-  stage_short = "int16";
-  stage_cur   = 0;
-  stage_max   = 2 * (len - 1) * (sizeof(interesting_16) >> 1);
-
-  orig_hit_cnt = new_hit_cnt;
-
-  for (i = 0; i < len - 1; i++) {
-
-    u16 orig = *(u16*)(out_buf + i);
-
-    /* Let's consult the effector map... */
-
-    if (!eff_map[EFF_APOS(i)] && !eff_map[EFF_APOS(i + 1)]) {
-      stage_max -= sizeof(interesting_16);
-      continue;
-    }
-
-    stage_cur_byte = i;
-    queue_cur->edit_distance+=16;
-    for (j = 0; j < sizeof(interesting_16) / 2; j++) {
-
-      stage_cur_val = interesting_16[j];
-
-      /* Skip if this could be a product of a bitflip, arithmetics,
-         or single-byte interesting value insertion. */
-
-      if (!could_be_bitflip(orig ^ (u16)interesting_16[j]) &&
-          !could_be_arith(orig, (u16)interesting_16[j], 2) &&
-          !could_be_interest(orig, (u16)interesting_16[j], 2, 0)) {
-
-        stage_val_type = STAGE_VAL_LE;
-
-        *(u16*)(out_buf + i) = interesting_16[j];
-
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-        stage_cur++;
-
-      } else stage_max--;
-
-      if ((u16)interesting_16[j] != SWAP16(interesting_16[j]) &&
-          !could_be_bitflip(orig ^ SWAP16(interesting_16[j])) &&
-          !could_be_arith(orig, SWAP16(interesting_16[j]), 2) &&
-          !could_be_interest(orig, SWAP16(interesting_16[j]), 2, 1)) {
-
-        stage_val_type = STAGE_VAL_BE;
-
-        *(u16*)(out_buf + i) = SWAP16(interesting_16[j]);
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-        stage_cur++;
-
-      } else stage_max--;
-
-    }
-
-    *(u16*)(out_buf + i) = orig;
-    queue_cur->edit_distance-=16;
-
-  }
-
-  new_hit_cnt = queued_paths + unique_crashes;
-
-  stage_finds[STAGE_INTEREST16]  += new_hit_cnt - orig_hit_cnt;
-  stage_cycles[STAGE_INTEREST16] += stage_max;
-
-  if (len < 4) goto skip_interest;
 
   /* Setting 32-bit integers, both endians. */
 
@@ -6205,6 +5907,352 @@ skip_arith:
 
   stage_finds[STAGE_INTEREST32]  += new_hit_cnt - orig_hit_cnt;
   stage_cycles[STAGE_INTEREST32] += stage_max;
+  //
+
+
+  /* Walking byte. */
+
+  stage_name  = "bitflip 8/8";
+  stage_short = "flip8";
+  stage_max   = len;
+
+  orig_hit_cnt = new_hit_cnt;
+
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+
+    stage_cur_byte = stage_cur;
+
+    out_buf[stage_cur] ^= 0xFF;
+    queue_cur->edit_distance+=8;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+
+    /* We also use this stage to pull off a simple trick: we identify
+       bytes that seem to have no effect on the current execution path
+       even when fully flipped - and we skip them during more expensive
+       deterministic stages, such as arithmetics or known ints. */
+
+    if (!eff_map[EFF_APOS(stage_cur)]) {
+
+      u32 cksum;
+
+      /* If in dumb mode or if the file is very short, just flag everything
+         without wasting time on checksums. */
+
+      if (!dumb_mode && len >= EFF_MIN_LEN)
+        cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
+      else
+        cksum = ~queue_cur->exec_cksum;
+
+      if (cksum != queue_cur->exec_cksum) {
+        eff_map[EFF_APOS(stage_cur)] = 1;
+        eff_cnt++;
+      }
+
+    }
+
+    out_buf[stage_cur] ^= 0xFF;
+    queue_cur->edit_distance-=8;
+
+  }
+
+  /* If the effector map is more than EFF_MAX_PERC dense, just flag the
+     whole thing as worth fuzzing, since we wouldn't be saving much time
+     anyway. */
+
+  if (eff_cnt != EFF_ALEN(len) &&
+      eff_cnt * 100 / EFF_ALEN(len) > EFF_MAX_PERC) {
+
+    memset(eff_map, 1, EFF_ALEN(len));
+
+    blocks_eff_select += EFF_ALEN(len);
+
+  } else {
+
+    blocks_eff_select += eff_cnt;
+
+  }
+
+  blocks_eff_total += EFF_ALEN(len);
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_FLIP8]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_FLIP8] += stage_max;
+
+
+  if (no_arith) goto skip_arith;
+
+  /**********************
+   * ARITHMETIC INC/DEC *
+   **********************/
+
+  /* 8-bit arithmetics. */
+
+  stage_name  = "arith 8/8";
+  stage_short = "arith8";
+  stage_cur   = 0;
+  stage_max   = 2 * len * ARITH_MAX;
+
+  stage_val_type = STAGE_VAL_LE;
+
+  orig_hit_cnt = new_hit_cnt;
+
+  for (i = 0; i < len; i++) {
+
+    u8 orig = out_buf[i];
+
+    /* Let's consult the effector map... */
+
+    if (!eff_map[EFF_APOS(i)]) {
+      stage_max -= 2 * ARITH_MAX;
+      continue;
+    }
+
+    stage_cur_byte = i;
+
+    for (j = 1; j <= ARITH_MAX; j++) {
+
+      u8 r = orig ^ (orig + j);
+
+      /* Do arithmetic operations only if the result couldn't be a product
+         of a bitflip. */
+
+      queue_cur->edit_distance+=8;
+      if (!could_be_bitflip(r)) {
+
+        stage_cur_val = j;
+        out_buf[i] = orig + j;
+
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        stage_cur++;
+
+      } else stage_max--;
+
+      r =  orig ^ (orig - j);
+
+      if (!could_be_bitflip(r)) {
+
+        stage_cur_val = -j;
+        out_buf[i] = orig - j;
+
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        stage_cur++;
+
+      } else stage_max--;
+
+      out_buf[i] = orig;
+      queue_cur->edit_distance-=8;
+
+    }
+
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_ARITH8]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_ARITH8] += stage_max;
+
+ 
+
+skip_arith:
+
+  /**********************
+   * INTERESTING VALUES *
+   **********************/
+
+  stage_name  = "interest 8/8";
+  stage_short = "int8";
+  stage_cur   = 0;
+  stage_max   = len * sizeof(interesting_8);
+
+  stage_val_type = STAGE_VAL_LE;
+
+  orig_hit_cnt = new_hit_cnt;
+
+  /* Setting 8-bit integers. */
+
+  for (i = 0; i < len; i++) {
+
+    u8 orig = out_buf[i];
+
+    /* Let's consult the effector map... */
+
+    if (!eff_map[EFF_APOS(i)]) {
+      stage_max -= sizeof(interesting_8);
+      continue;
+    }
+
+    stage_cur_byte = i;
+
+    for (j = 0; j < sizeof(interesting_8); j++) {
+
+      /* Skip if the value could be a product of bitflips or arithmetics. */
+
+      if (could_be_bitflip(orig ^ (u8)interesting_8[j]) ||
+          could_be_arith(orig, (u8)interesting_8[j], 1)) {
+        stage_max--;
+        continue;
+      }
+
+      stage_cur_val = interesting_8[j];
+      out_buf[i] = interesting_8[j];
+      queue_cur->edit_distance+=8;
+      if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+
+      out_buf[i] = orig;
+      stage_cur++;
+      queue_cur->edit_distance-=8;
+
+    }
+
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_INTEREST8]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_INTEREST8] += stage_max;
+//
+
+  /* Four walking bits. */
+
+  stage_name  = "bitflip 4/1";
+  stage_short = "flip4";
+  stage_max   = (len << 3) - 3;
+
+  orig_hit_cnt = new_hit_cnt;
+
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+
+    stage_cur_byte = stage_cur >> 3;
+
+    FLIP_BIT(out_buf, stage_cur);
+    FLIP_BIT(out_buf, stage_cur + 1);
+    FLIP_BIT(out_buf, stage_cur + 2);
+    FLIP_BIT(out_buf, stage_cur + 3);
+    queue_cur->edit_distance+=4;
+
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+
+    FLIP_BIT(out_buf, stage_cur);
+    FLIP_BIT(out_buf, stage_cur + 1);
+    FLIP_BIT(out_buf, stage_cur + 2);
+    FLIP_BIT(out_buf, stage_cur + 3);
+    queue_cur->edit_distance-=4;
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_FLIP4]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_FLIP4] += stage_max;
+  //
+
+  /* Two walking bits. */
+
+  stage_name  = "bitflip 2/1";
+  stage_short = "flip2";
+  stage_max   = (len << 3) - 1;
+
+  orig_hit_cnt = new_hit_cnt;
+
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+
+    stage_cur_byte = stage_cur >> 3;
+
+    FLIP_BIT(out_buf, stage_cur);
+    FLIP_BIT(out_buf, stage_cur + 1);
+    queue_cur->edit_distance+=2;
+
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+
+    FLIP_BIT(out_buf, stage_cur);
+    FLIP_BIT(out_buf, stage_cur + 1);
+    queue_cur->edit_distance-=2;
+
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_FLIP2]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_FLIP2] += stage_max;
+//
+
+  /* Single walking bit. */
+
+
+  stage_short = "flip1";
+  stage_max   = len << 3;
+  stage_name  = "bitflip 1/1";
+
+  stage_val_type = STAGE_VAL_NONE;
+
+  orig_hit_cnt = queued_paths + unique_crashes;
+
+  prev_cksum = queue_cur->exec_cksum;
+
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+
+    stage_cur_byte = stage_cur >> 3;
+
+    FLIP_BIT(out_buf, stage_cur);
+    queue_cur->edit_distance+=1;
+
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+
+    FLIP_BIT(out_buf, stage_cur);
+    queue_cur->edit_distance-=1;
+
+  
+    if (!dumb_mode && (stage_cur & 7) == 7) {
+
+      u32 cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
+
+      if (stage_cur == stage_max - 1 && cksum == prev_cksum) {
+
+        /* If at end of file and we are still collecting a string, grab the
+           final character and force output. */
+
+        if (a_len < MAX_AUTO_EXTRA) a_collect[a_len] = out_buf[stage_cur >> 3];
+        a_len++;
+
+        if (a_len >= MIN_AUTO_EXTRA && a_len <= MAX_AUTO_EXTRA)
+          maybe_add_auto(a_collect, a_len);
+
+      } else if (cksum != prev_cksum) {
+
+        /* Otherwise, if the checksum has changed, see if we have something
+           worthwhile queued up, and collect that if the answer is yes. */
+
+        if (a_len >= MIN_AUTO_EXTRA && a_len <= MAX_AUTO_EXTRA)
+          maybe_add_auto(a_collect, a_len);
+
+        a_len = 0;
+        prev_cksum = cksum;
+
+      }
+
+      /* Continue collecting string, but only if the bit flip actually made
+         any difference - we don't want no-op tokens. */
+
+      if (cksum != queue_cur->exec_cksum) {
+
+        if (a_len < MAX_AUTO_EXTRA) a_collect[a_len] = out_buf[stage_cur >> 3];        
+        a_len++;
+
+      }
+
+    }
+
+  }
+
+  new_hit_cnt = queued_paths + unique_crashes;
+
+  stage_finds[STAGE_FLIP1]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_FLIP1] += stage_max;
+
+
+
+
+
 
 skip_interest:
 
