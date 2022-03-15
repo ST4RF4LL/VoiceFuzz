@@ -5263,7 +5263,7 @@ static u8 fuzz_one(char** argv) {
   u16* eff_map;
   u64 havoc_queued,  orig_hit_cnt, new_hit_cnt;
   u32 splice_cycle = 0, perf_score = 100, orig_perf, prev_cksum, eff_cnt = 1;
-
+  u16 ex_temp;
   u8  ret_val = 1, doing_det = 0;
 
   u8  a_collect[MAX_AUTO_EXTRA];
@@ -5483,14 +5483,17 @@ static u8 fuzz_one(char** argv) {
 
     stage_cur_byte = i;
 
-    if (!eff_map[stage_cur_byte/2])
-    {
-      stage_max -= 1;
-      continue;
-    }
 
     *(u16*)(out_buf + i) ^= 0xFFFF;
     queue_cur->edit_distance+=16;
+
+    ex_temp = abs(*(u16*)(out_buf + i)-*(u16*)(out_buf + i) ^ 0xFFFF);
+    if (!eff_map[i/2] || ex_temp>eff_map[i/2])
+    {
+      stage_max --;
+      continue;
+    }
+
 
     if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
     stage_cur++;
@@ -5499,7 +5502,7 @@ static u8 fuzz_one(char** argv) {
     queue_cur->edit_distance-=16;
 
 
-  if (wrong_flag)update_eff(eff_map,stage_cur_byte/2,abs(*(u16*)(out_buf + i)-*(u16*)(out_buf + i) ^ 0xFFFF));
+  if (wrong_flag)update_eff(eff_map,stage_cur_byte/2,ex_temp);
   
 
   }
@@ -5531,7 +5534,7 @@ static u8 fuzz_one(char** argv) {
 
 
     stage_cur_byte = i;
-    if (!eff_map[stage_cur_byte/2]) {
+    if (!eff_map[i/2]) {
       stage_max -= 4 * ARITH_MAX;
       continue;
     }
@@ -5547,7 +5550,7 @@ static u8 fuzz_one(char** argv) {
       stage_val_type = STAGE_VAL_LE; 
 
       queue_cur->edit_distance+=16;
-      if ((orig & 0xff) + j > 0xff && !could_be_bitflip(r1)) {
+      if ((orig & 0xff) + j > 0xff && !could_be_bitflip(r1) && j < eff_map[i/2]) {
 
         stage_cur_val = j;
         *(u16*)(out_buf + i) = orig + j;
@@ -5555,14 +5558,14 @@ static u8 fuzz_one(char** argv) {
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
-        if (wrong_flag)update(eff_map,stage_cur_byte/2,j);
+        if (wrong_flag)update(eff_map,i/2,j);
         // {
         //   eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],stage_cur_val);
         // }
  
       } else stage_max--;
 
-      if ((orig & 0xff) < j && !could_be_bitflip(r2)) {
+      if ((orig & 0xff) < j && !could_be_bitflip(r2) && j < eff_map[i/2]) {
 
         stage_cur_val = -j;
         *(u16*)(out_buf + i) = orig - j;
@@ -5570,7 +5573,7 @@ static u8 fuzz_one(char** argv) {
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
-        if (wrong_flag)update(eff_map,stage_cur_byte/2,j);
+        if (wrong_flag)update(eff_map,i/2,j);
         // {
         //   eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],stage_cur_val);
         // }
@@ -5581,32 +5584,32 @@ static u8 fuzz_one(char** argv) {
 
       stage_val_type = STAGE_VAL_BE;
 
-
-      if ((orig >> 8) + j > 0xff && !could_be_bitflip(r3)) {
+      ex_temp = j << 8;
+      if ((orig >> 8) + j > 0xff && !could_be_bitflip(r3) && ex_temp < eff_map[i/2]) {
 
         stage_cur_val = j;
         *(u16*)(out_buf + i) = SWAP16(SWAP16(orig) + j);
 
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
-        if (wrong_flag)
-        {
-          eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],stage_cur_val);
-        }
+        if (wrong_flag)update(eff_map,stage_cur_byte/2,ex_temp);
+        // {
+        //   eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],stage_cur_val);
+        // }
 
       } else stage_max--;
 
-      if ((orig >> 8) < j && !could_be_bitflip(r4)) {
+      if ((orig >> 8) < j && !could_be_bitflip(r4) && ex_temp < eff_map[i/2]) {
 
         stage_cur_val = -j;
         *(u16*)(out_buf + i) = SWAP16(SWAP16(orig) - j);
 
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
-        if (wrong_flag)
-        {
-          eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],stage_cur_val);
-        }
+        if (wrong_flag)update_eff(eff_map,stage_cur_byte/2,ex_temp);
+        // {
+        //   eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],stage_cur_val);
+        // }
 
       } else stage_max--;
 
@@ -5640,7 +5643,7 @@ static u8 fuzz_one(char** argv) {
 
     /* Let's consult the effector map... */
 
-    if (!eff_map[EFF_APOS(i/2)]) {
+    if (!eff_map[i/2]) {
       stage_max -= sizeof(interesting_16);
       continue;
     }
@@ -5656,7 +5659,9 @@ static u8 fuzz_one(char** argv) {
 
       if (!could_be_bitflip(orig ^ (u16)interesting_16[j]) &&
           !could_be_arith(orig, (u16)interesting_16[j], 2) &&
-          !could_be_interest(orig, (u16)interesting_16[j], 2, 0)) {
+          !could_be_interest(orig, (u16)interesting_16[j], 2, 0) &&
+          stage_cur_val < eff_map[i/2]
+          ) {
 
         stage_val_type = STAGE_VAL_LE;
 
@@ -5665,17 +5670,19 @@ static u8 fuzz_one(char** argv) {
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
-        if (wrong_flag)
-        {
-          eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],abs(eff_map[EFF_APOS(stage_cur)/2]-(u16)interesting_16[j]));
-        }
+        if (wrong_flag)update_eff(eff_map,stage_cur_byte,abs((u16)stage_cur_val-orig));
+        // {
+        //   eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],abs(eff_map[EFF_APOS(stage_cur)/2]-(u16)interesting_16[j]));
+        // }
 
       } else stage_max--;
 
       if ((u16)interesting_16[j] != SWAP16(interesting_16[j]) &&
           !could_be_bitflip(orig ^ SWAP16(interesting_16[j])) &&
           !could_be_arith(orig, SWAP16(interesting_16[j]), 2) &&
-          !could_be_interest(orig, SWAP16(interesting_16[j]), 2, 1)) {
+          !could_be_interest(orig, SWAP16(interesting_16[j]), 2, 1) &&
+          SWAP16(stage_cur_val) < eff_map[i/2]
+          ) {
 
         stage_val_type = STAGE_VAL_BE;
 
@@ -5683,10 +5690,10 @@ static u8 fuzz_one(char** argv) {
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
 
-        if (wrong_flag)
-        {
-          eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],abs(eff_map[EFF_APOS(stage_cur)/2]-SWAP16(interesting_16[j])));
-        }
+        if (wrong_flag)update_eff(eff_map,stage_cur_byte,abs((u16)SWAP(stage_cur_val)-orig));
+        // {
+        //   eff_map[EFF_APOS(stage_cur)/2] = MIN(eff_map[EFF_APOS(stage_cur)/2],abs(eff_map[EFF_APOS(stage_cur)/2]-SWAP16(interesting_16[j])));
+        // }
 
       } else stage_max--;
 
@@ -5719,8 +5726,7 @@ static u8 fuzz_one(char** argv) {
   for (i = 0; i < len - 3; i++) {
 
     /* Let's consult the effector map... */
-    if (!eff_map[EFF_APOS(i)] && !eff_map[EFF_APOS(i + 1)] &&
-        !eff_map[EFF_APOS(i + 2)] && !eff_map[EFF_APOS(i + 3)]) {
+    if (!eff_map[i/2] && !eff_map[i/2+1]) {
       stage_max--;
       continue;
     }
@@ -5731,6 +5737,10 @@ static u8 fuzz_one(char** argv) {
     queue_cur->edit_distance+=32;
     if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
     stage_cur++;
+
+  if (wrong_flag)update_eff(eff_map,i/2,abs(*(u16*)(out_buf + i)-*(u16*)(out_buf + i) ^ 0xFFFF));
+  if (wrong_flag)update_eff(eff_map,i/2+1,abs(*(u16*)(out_buf + i+1)-*(u16*)(out_buf + i+1) ^ 0xFFFF));
+
 
     *(u32*)(out_buf + i) ^= 0xFFFFFFFF;
     queue_cur->edit_distance-=32;
@@ -5761,12 +5771,11 @@ static u8 fuzz_one(char** argv) {
 
     /* Let's consult the effector map... */
 
-    if (!eff_map[EFF_APOS(i)] && !eff_map[EFF_APOS(i + 1)] &&
-        !eff_map[EFF_APOS(i + 2)] && !eff_map[EFF_APOS(i + 3)]) {
+    if (!eff_map[i/2] && !eff_map[i/2+1]) {
       stage_max -= 4 * ARITH_MAX;
       continue;
     }
-
+    
     stage_cur_byte = i;
 
     for (j = 1; j <= ARITH_MAX; j++) {
@@ -5789,6 +5798,9 @@ static u8 fuzz_one(char** argv) {
 
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
+        if (wrong_flag)update(eff_map,i/2,j);//little endian
+        // if (wrong_flag)update(eff_map,i/2,j);
+
 
       } else stage_max--;
 
@@ -5799,6 +5811,8 @@ static u8 fuzz_one(char** argv) {
 
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
+        if (wrong_flag)update(eff_map,i/2,j);//little endian
+
 
       } else stage_max--;
 
@@ -5813,6 +5827,8 @@ static u8 fuzz_one(char** argv) {
 
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
+        if (wrong_flag)update(eff_map,i/2+1,j);//big endian
+
 
       } else stage_max--;
 
@@ -5823,6 +5839,8 @@ static u8 fuzz_one(char** argv) {
 
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
+        if (wrong_flag)update(eff_map,i/2+1,j);//big endian
+
 
       } else stage_max--;
 
@@ -5855,8 +5873,7 @@ static u8 fuzz_one(char** argv) {
 
     /* Let's consult the effector map... */
 
-    if (!eff_map[EFF_APOS(i)] && !eff_map[EFF_APOS(i + 1)] &&
-        !eff_map[EFF_APOS(i + 2)] && !eff_map[EFF_APOS(i + 3)]) {
+    if (!eff_map[i/2] && !eff_map[i/2 + 1]) {
       stage_max -= sizeof(interesting_32) >> 1;
       continue;
     }
@@ -5880,6 +5897,12 @@ static u8 fuzz_one(char** argv) {
 
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
+        if(wrong_flag)
+        {
+          update_eff(eff_map,i/2,(u32)interesting_32[j]&0x0000FFFF);
+          update_eff(eff_map,i/2+1,(u32)interesting_32[j]>>16);
+        }
+
 
       } else stage_max--;
 
@@ -5893,6 +5916,11 @@ static u8 fuzz_one(char** argv) {
         *(u32*)(out_buf + i) = SWAP32(interesting_32[j]);
         if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
         stage_cur++;
+        if(wrong_flag)
+        {
+          update_eff(eff_map,i/2,(u32)interesting_32[j]>>16);
+          update_eff(eff_map,i/2+1,(u32)interesting_32[j]&0x0000FFFF);
+        }
 
       } else stage_max--;
 
@@ -5921,6 +5949,11 @@ static u8 fuzz_one(char** argv) {
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
     stage_cur_byte = stage_cur;
+    if (!eff_map[stage_cur_byte/2])
+    {
+      stage_max--;
+      continue;
+    }
 
     out_buf[stage_cur] ^= 0xFF;
     queue_cur->edit_distance+=8;
@@ -5931,24 +5964,27 @@ static u8 fuzz_one(char** argv) {
        even when fully flipped - and we skip them during more expensive
        deterministic stages, such as arithmetics or known ints. */
 
-    if (!eff_map[EFF_APOS(stage_cur)]) {
+    if (wrong_flag)update_eff(eff_map,stage_cur_byte/2,(stage_cur_byte%2)?(abs(*(u16*)(out_buf + i)-*(u16*)(out_buf + i) ^ 0xFF00)):(abs(*(u16*)(out_buf + i)-*(u16*)(out_buf + i) ^ 0x00FF)));
 
-      u32 cksum;
 
-      /* If in dumb mode or if the file is very short, just flag everything
-         without wasting time on checksums. */
+    // if (!eff_map[EFF_APOS(stage_cur)]) {
 
-      if (!dumb_mode && len >= EFF_MIN_LEN)
-        cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-      else
-        cksum = ~queue_cur->exec_cksum;
+    //   u32 cksum;
 
-      if (cksum != queue_cur->exec_cksum) {
-        eff_map[EFF_APOS(stage_cur)] = 1;
-        eff_cnt++;
-      }
+    //   /* If in dumb mode or if the file is very short, just flag everything
+    //      without wasting time on checksums. */
 
-    }
+    //   if (!dumb_mode && len >= EFF_MIN_LEN)
+    //     cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
+    //   else
+    //     cksum = ~queue_cur->exec_cksum;
+
+    //   if (cksum != queue_cur->exec_cksum) {
+    //     eff_map[EFF_APOS(stage_cur)] = 1;
+    //     eff_cnt++;
+    //   }
+
+    // }
 
     out_buf[stage_cur] ^= 0xFF;
     queue_cur->edit_distance-=8;
@@ -5959,20 +5995,20 @@ static u8 fuzz_one(char** argv) {
      whole thing as worth fuzzing, since we wouldn't be saving much time
      anyway. */
 
-  if (eff_cnt != EFF_ALEN(len) &&
-      eff_cnt * 100 / EFF_ALEN(len) > EFF_MAX_PERC) {
+  // if (eff_cnt != EFF_ALEN(len) &&
+  //     eff_cnt * 100 / EFF_ALEN(len) > EFF_MAX_PERC) {
 
-    memset(eff_map, 1, EFF_ALEN(len));
+  //   memset(eff_map, 1, EFF_ALEN(len));
 
-    blocks_eff_select += EFF_ALEN(len);
+  //   blocks_eff_select += EFF_ALEN(len);
 
-  } else {
+  // } else {
 
-    blocks_eff_select += eff_cnt;
+  //   blocks_eff_select += eff_cnt;
 
-  }
+  // }
 
-  blocks_eff_total += EFF_ALEN(len);
+  // blocks_eff_total += EFF_ALEN(len);
 
   new_hit_cnt = queued_paths + unique_crashes;
 
@@ -6003,7 +6039,7 @@ static u8 fuzz_one(char** argv) {
 
     /* Let's consult the effector map... */
 
-    if (!eff_map[EFF_APOS(i)]) {
+    if (!eff_map[i/2]) {
       stage_max -= 2 * ARITH_MAX;
       continue;
     }
