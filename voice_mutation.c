@@ -70,10 +70,11 @@ int freq_mod(u8* wav_buf,u32 start,u32 width,u32 length,u16 value)
 //width is sample point offset,not memory offset!
 //so that temp_len and i are also the sample point number
 //start is the memory offset!
-int speed_mod(u8* wav_buf,u32 start,u32 width,u32 length,u16 rate)
+int speed_up(u8* wav_buf,u32 start,u32 width,u32 length,u16 rate)
 {
     u32 temp_len = 0;
-    u8 *new_buf,*temp_buf;
+    u8 *temp_buf;
+    // u8 *new_buf,*temp_buf;
     if (start+2*width>length)return 0;
     // new_buf = ck_alloc_nozero();
     temp_buf = malloc(sizeof(u8)*width);
@@ -82,7 +83,7 @@ int speed_mod(u8* wav_buf,u32 start,u32 width,u32 length,u16 rate)
     {
         *(u16*)(temp_buf + 2*temp_len) = *(u16*)(wav_buf+start+2*i);
     }
-    new_buf = malloc(sizeof(u8)*(length-2*width+2*temp_len));
+    // new_buf = malloc(sizeof(u8)*(length-2*width+2*temp_len));
     printf("%d\n",2*temp_len);
     //Head
     // memcpy(new_buf,wav_buf,start);
@@ -99,9 +100,46 @@ int speed_mod(u8* wav_buf,u32 start,u32 width,u32 length,u16 rate)
 
 }
 
-//words overwrite
 
-//audio overlay
+int speed_down(u8* wav_buf,u32 start,u32 width,u32 length,u16 rate)
+{
+    u32 temp_len = 0;
+    u8 *new_buf;
+    if (start+2*width>length)return 0;
+    // new_buf = ck_alloc_nozero();
+    new_buf = malloc(sizeof(u8)*(length+2*width*(rate-1)));
+
+    //Head
+    memcpy(new_buf,wav_buf,start);
+    //modified block
+
+    //middle
+    for (size_t i = 0; i < width; i+=rate,temp_len++)
+    {
+        for (size_t j = 0; j < rate; j++)
+        {
+            *(u16*)(new_buf + start+2*(i*rate+j)) = *(u16*)(wav_buf+start+2*i);
+        }
+         
+    }
+    //Tail
+    memcpy(wav_buf+start+2*width*rate,wav_buf+start+2*width,length-start-2*width);
+    free(wav_buf);
+    wav_buf = new_buf;
+    size_fixer(wav_buf,length+2*width*(rate-1));
+    return (int)(16*width*(rate-1));
+
+}
+
+//MIX
+
+int voice_mix(u8* wav_buf,u8* insert_buf,u32 start,u32 length,u16 ratio)
+{
+    int v_MAX=32767,v_MIN=-32768;
+    double f=1;
+    
+    return 0;
+}
 
 int main(int argc, char const *argv[])
 {
@@ -119,7 +157,7 @@ int main(int argc, char const *argv[])
     }
     fclose(fp);
     freq_mod(wav_buf,0x3910,0x1000,len,0xC000);
-    // speed_mod(wav_buf,0x3910,0x1000,len,2);
+    // speed_up(wav_buf,0x3910,0x1000,len,2);
     // size_fixer(wav_buf,len);
     // printf("%d\n%d\n",*(u32*)(wav_buf + 0x04),*(u32*)(wav_buf + 0x4A));
 
