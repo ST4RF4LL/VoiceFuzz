@@ -6932,14 +6932,27 @@ havoc_stage:
             break;
 
           }
+        case 17: {
+
+        }
 
       }
 
     }
+    
+    
     queue_cur->edit_distance+=dist_tmp;
     if (common_fuzz_stuff(argv,orig_in, out_buf, temp_len,queue_cur->edit_distance))
       goto abandon_entry;
     // queue_cur->edit_distance-=dist_tmp;
+
+    //dangerous mutation!
+    if (UR(10)>9)//and flag
+    {
+      //voice MIX
+
+    }
+    
 
     /* out_buf might have been mangled a bit, so let's restore it to its
        original size and shape. */

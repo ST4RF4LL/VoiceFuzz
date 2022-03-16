@@ -133,11 +133,18 @@ int speed_down(u8* wav_buf,u32 start,u32 width,u32 length,u16 rate)
 
 //MIX
 
-int voice_mix(u8* wav_buf,u8* insert_buf,u32 start,u32 length,u16 ratio)
+int voice_mix(u8* out_buf,u8* insert_buf,u32 start,u32 length,u32 insert_length,double ratio)
 {
-    int v_MAX=32767,v_MIN=-32768;
-    double f=1;
-    
+
+    for (size_t i = start; i < (length<insert_length?length:insert_length); i+=2)
+    {
+        //new = old + ratio*insert
+        u16 temp = *(u16*)(insert_buf+i)
+        *(u16*)(out_buf+i) += (u16)(ratio*(double)temp);
+        
+    }
+
+
     return 0;
 }
 
@@ -156,7 +163,7 @@ int main(int argc, char const *argv[])
         // WAV1[i]=c;
     }
     fclose(fp);
-    freq_mod(wav_buf,0x3910,0x1000,len,0xC000);
+    // freq_mod(wav_buf,0x3910,0x1000,len,0xC000);
     // speed_up(wav_buf,0x3910,0x1000,len,2);
     // size_fixer(wav_buf,len);
     // printf("%d\n%d\n",*(u32*)(wav_buf + 0x04),*(u32*)(wav_buf + 0x4A));
