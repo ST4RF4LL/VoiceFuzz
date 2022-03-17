@@ -243,6 +243,7 @@ static FILE* plot_file;               /* Gnuplot output file              */
 
 //Wh4lter
 char* orig_trans;
+u8 eff_map_number=0;
 // char* result;
 int stdout_pipe[2];
 
@@ -272,6 +273,7 @@ struct queue_entry {
   char* orig_translation;             //original translation
   // char* result;                       //translation after mutated
   int edit_distance;                  //edit distance of the input, to evaluate the effectiveness
+  u8 eff_map_number;
 
 
 
@@ -827,7 +829,7 @@ static void mark_as_redundant(struct queue_entry* q, u8 state) {
 
 /* Append new test case to the queue. */
 
-static void add_to_queue(u8* fname, u32 len, u8 passed_det,u8* ori_trans,int edit_distance) {
+static void add_to_queue(u8* fname, u32 len, u8 passed_det,u8* ori_trans,int edit_distance,u8 eff_map_number) {
 
   struct queue_entry* q = ck_alloc(sizeof(struct queue_entry));
 
@@ -838,6 +840,8 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det,u8* ori_trans,int edi
   q->orig_translation = ori_trans;
   q->edit_distance = edit_distance;
   // printf("%s\n",q->orig_translation);
+  //set eff_map
+  q->eff_map_number = eff_map_number;
   if (q->depth > max_depth) max_depth = q->depth;
 
   if (queue_top) {
@@ -860,7 +864,13 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det,u8* ori_trans,int edi
 
   }
 
+
+  
+  
+
   last_path_time = get_cur_time();
+
+  
 
 }
 
@@ -1563,7 +1573,7 @@ static void read_testcases(void) {
     edit_distance = atof(strtok(NULL,delims));
     // printf("%d\n",edit_distance);
 
-    add_to_queue(fn, st.st_size, passed_det,ori_trans,edit_distance);
+    add_to_queue(fn, st.st_size, passed_det,ori_trans,edit_distance,0);
 
   }
 
@@ -3330,7 +3340,7 @@ static double evaluate_testcase(int input_distance,int output_distance)
    save or queue the input test case for further analysis if so. Returns 1 if
    entry is saved, 0 otherwise. */
 
-static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit_distance) {
+static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit_distance,u8* eff_map) {
 
   u8  *fn = "";
   u8  hnb;
@@ -3345,7 +3355,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit
     if (!(hnb = has_new_bits(virgin_bits))) {
       if (crash_mode) total_crashes++;
       return 0;
-    }    
+    }
 
 #ifndef SIMPLE_FILES
 
@@ -3357,8 +3367,8 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit
     fn = alloc_printf("%s/queue/id_%06u", out_dir, queued_paths);
 
 #endif /* ^!SIMPLE_FILES */
-
-    add_to_queue(fn, len, 0,orig_trans,edit_distance);
+    
+    add_to_queue(fn, len, 0,orig_trans,edit_distance,0);
 
     if (hnb == 2) {
       queue_top->has_new_cov = 1;
@@ -3383,6 +3393,58 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit
     keeping = 1;
 
   }
+
+  if (fault == FAULT_TRANS)
+  {
+    double score = (double)outbuf_distance/(double)inbuf_distance;
+    if (score<0.0001&&inbuf_distance>0.7*len)
+    {
+      return keeping;//TODO
+    }
+  
+#ifndef SIMPLE_FILES
+
+    fn = alloc_printf("%s/queue/id:%06u,%s", out_dir, queued_paths,
+                      describe_op(hnb));
+
+#else
+
+    fn = alloc_printf("%s/queue/id_%06u", out_dir, queued_paths);
+
+#endif /* ^!SIMPLE_FILES */
+
+    if (len!=sizeof(eff_map))
+    {
+      //need a new eff_map
+      u8* map_name = alloc_printf("%s/eff_maps/%06u", out_dir,++eff_map_number);
+      s32 fd = open(map_name,O_WRONLY | O_CREAT | O_TRUNC, 0600);
+      ck_write(fd, eff_map, sizeof(map_name), map_name);
+      close(fd);
+      ck_free(map_name);
+
+    }
+
+    add_to_queue(fn, len, 0,orig_trans,edit_distance,eff_map_number);
+
+    queue_top->exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
+
+    /* Try to calibrate inline; this also calls update_bitmap_score() when
+       successful. */
+
+    res = calibrate_case(argv, queue_top, mem, queue_cycle - 1, 0);
+
+    if (res == FAULT_ERROR)
+      FATAL("Unable to execute target application");
+
+    fd = open(fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) PFATAL("Unable to create '%s'", fn);
+    ck_write(fd, mem, len, fn);
+    close(fd);
+
+    keeping = 1;
+
+  }
+  
 
   switch (fault) {
 
@@ -4872,7 +4934,7 @@ abort_trimming:
    error conditions, returning 1 if it's time to bail out. This is
    a helper function for fuzz_one(). */
 
-EXP_ST u8 common_fuzz_stuff(char** argv,u8* in_buf, u8* out_buf, u32 len,int edit_distance) {
+EXP_ST u8 common_fuzz_stuff(char** argv,u8* in_buf, u8* out_buf, u32 len,int edit_distance,u8* eff_map) {
 
   u8 fault;
 
@@ -4924,7 +4986,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv,u8* in_buf, u8* out_buf, u32 len,int edi
 
   /* This handles FAULT_ERROR for us: */
 
-  queued_discovered += save_if_interesting(argv, out_buf, len, fault,edit_distance);
+  queued_discovered += save_if_interesting(argv, out_buf, len, fault,edit_distance,eff_map);
 
   if (!(stage_cur % stats_update_freq) || stage_cur + 1 == stage_max)
     show_stats();
@@ -5439,24 +5501,30 @@ static u8 fuzz_one(char** argv) {
    */
 
   // eff_map    = ck_alloc(EFF_ALEN(len/2));
-  eff_map = malloc(sizeof(u16)*(len/2));
-  // eff_map[0] = 1;
-  for (size_t i = 0; i < 0x4E/2; i++)
-  {
-    eff_map[i]=0x0000;
-  }
-  for (size_t i = 0x4E/2; i < len/2; i++)
-  {
-    eff_map[i]=0xFFFF;
-  }
-  
-  
-  // ex_eff_map = ck_alloc(EFF_ALEN(len));
 
-  // if (EFF_APOS(len - 1) != 0) {
-  //   eff_map[EFF_APOS(len - 1)] = 1;
-  //   eff_cnt++;
-  // }
+    u8* map_name;
+    map_name=alloc_printf("%s/eff_maps/%06u",out_dir,queue_cur->eff_map_number);
+
+    if (!access(map_name,0))
+    {
+      //try load eff_map
+      s32 fd = open(map_name,O_RDONLY);
+      if (fd < 0) PFATAL("Unable to open '%s'", map_name);
+      ck_read(fd,eff_map,len,map_name);
+    }else
+    {
+      eff_map = malloc(sizeof(u16)*(len/2));
+      // eff_map[0] = 1;
+      for (size_t i = 0; i < 0x4E/2; i++)
+      {
+        eff_map[i]=0x0000;
+      }
+      for (size_t i = 0x4E/2; i < len/2; i++)
+      {
+        eff_map[i]=0xFFFF;
+      }  
+    }
+    free(map_name);  
 
   /*********************************************
    * 16bits                                    *
@@ -5467,6 +5535,7 @@ static u8 fuzz_one(char** argv) {
     u32 _bf = (_b); \
     _arf[(_bf) >> 3] ^= (128 >> ((_bf) & 7)); \
   } while (0)
+
 
 
   /* Two walking bytes. */
@@ -5502,7 +5571,7 @@ static u8 fuzz_one(char** argv) {
 
 
 
-    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
     stage_cur++;
 
     *(u16*)(out_buf + i) ^= 0xFFFF;
@@ -5524,7 +5593,7 @@ static u8 fuzz_one(char** argv) {
 
  /* 16-bit arithmetics, both endians. */
 
-  if (len < 2) goto skip_arith;
+  // if (len < 2) goto skip_arith;
 
   stage_name  = "arith 16/16";
   stage_short = "arith16";
@@ -5541,7 +5610,7 @@ static u8 fuzz_one(char** argv) {
 
 
     stage_cur_byte = i;
-    if (!eff_map[i/2]) {
+    if (!eff_map[i/2] || eff_map[i/2]==0xFFFF) {
       stage_max -= 4 * ARITH_MAX;
       continue;
     }
@@ -5562,7 +5631,7 @@ static u8 fuzz_one(char** argv) {
         stage_cur_val = j;
         *(u16*)(out_buf + i) = orig + j;
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
 
         if (wrong_flag)update_eff(eff_map,i/2,j);
@@ -5577,7 +5646,7 @@ static u8 fuzz_one(char** argv) {
         stage_cur_val = -j;
         *(u16*)(out_buf + i) = orig - j;
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
 
         if (wrong_flag)update_eff(eff_map,i/2,j);
@@ -5597,7 +5666,7 @@ static u8 fuzz_one(char** argv) {
         stage_cur_val = j;
         *(u16*)(out_buf + i) = SWAP16(SWAP16(orig) + j);
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
         if (wrong_flag)update_eff(eff_map,stage_cur_byte/2,ex_temp);
         // {
@@ -5611,7 +5680,7 @@ static u8 fuzz_one(char** argv) {
         stage_cur_val = -j;
         *(u16*)(out_buf + i) = SWAP16(SWAP16(orig) - j);
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
         if (wrong_flag)update_eff(eff_map,stage_cur_byte/2,ex_temp);
         // {
@@ -5654,6 +5723,12 @@ static u8 fuzz_one(char** argv) {
       stage_max -= sizeof(interesting_16);
       continue;
     }
+    if (eff_map[i/2]==0xFFFF&&UR(10)<5)
+    {
+      stage_max -= sizeof(interesting_16);
+      continue;
+    }
+    
 
     stage_cur_byte = i;
     queue_cur->edit_distance+=16;
@@ -5674,7 +5749,7 @@ static u8 fuzz_one(char** argv) {
 
         *(u16*)(out_buf + i) = interesting_16[j];
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
 
         if (wrong_flag)update_eff(eff_map,stage_cur_byte,abs((u16)stage_cur_val-orig));
@@ -5694,7 +5769,7 @@ static u8 fuzz_one(char** argv) {
         stage_val_type = STAGE_VAL_BE;
 
         *(u16*)(out_buf + i) = SWAP16(interesting_16[j]);
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
 
         if (wrong_flag)update_eff(eff_map,stage_cur_byte,abs((u16)SWAP16(stage_cur_val)-orig));
@@ -5753,7 +5828,7 @@ static u8 fuzz_one(char** argv) {
     
 
     queue_cur->edit_distance+=32;
-    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
     stage_cur++;
 
   if (wrong_flag)update_eff(eff_map,i/2,abs(*(u16*)(out_buf + i)-*(u16*)(out_buf + i) ^ 0xFFFF));
@@ -5773,7 +5848,7 @@ static u8 fuzz_one(char** argv) {
 
   /* 32-bit arithmetics, both endians. */
 
-  if (len < 4) goto skip_arith;
+  // if (len < 4) goto skip_arith;
 
   stage_name  = "arith 32/16";
   stage_short = "arith32";
@@ -5814,7 +5889,7 @@ static u8 fuzz_one(char** argv) {
         stage_cur_val = j;
         *(u32*)(out_buf + i) = orig + j;
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
         if (wrong_flag)update_eff(eff_map,i/2,j);//little endian
         // if (wrong_flag)update(eff_map,i/2,j);
@@ -5827,7 +5902,7 @@ static u8 fuzz_one(char** argv) {
         stage_cur_val = -j;
         *(u32*)(out_buf + i) = orig - j;
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
         if (wrong_flag)update_eff(eff_map,i/2,j);//little endian
 
@@ -5843,7 +5918,7 @@ static u8 fuzz_one(char** argv) {
         stage_cur_val = j;
         *(u32*)(out_buf + i) = SWAP32(SWAP32(orig) + j);
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
         if (wrong_flag)update_eff(eff_map,i/2+1,j);//big endian
 
@@ -5855,7 +5930,7 @@ static u8 fuzz_one(char** argv) {
         stage_cur_val = -j;
         *(u32*)(out_buf + i) = SWAP32(SWAP32(orig) - j);
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
         if (wrong_flag)update_eff(eff_map,i/2+1,j);//big endian
 
@@ -5917,7 +5992,7 @@ static u8 fuzz_one(char** argv) {
 
         *(u32*)(out_buf + i) = interesting_32[j];
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
         if(wrong_flag)
         {
@@ -5937,7 +6012,7 @@ static u8 fuzz_one(char** argv) {
         stage_val_type = STAGE_VAL_BE;
 
         *(u32*)(out_buf + i) = SWAP32(interesting_32[j]);
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
         if(wrong_flag)
         {
@@ -5989,7 +6064,7 @@ goto havoc_stage;
 
     out_buf[stage_cur] ^= 0xFF;
     queue_cur->edit_distance+=8;
-    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
 
     /* We also use this stage to pull off a simple trick: we identify
        bytes that seem to have no effect on the current execution path
@@ -6048,7 +6123,7 @@ goto havoc_stage;
   stage_cycles[STAGE_FLIP8] += stage_max;
 
 
-  if (no_arith) goto skip_arith;
+  // if (no_arith) goto skip_arith;
 
   /**********************
    * ARITHMETIC INC/DEC *
@@ -6080,6 +6155,13 @@ goto havoc_stage;
 
     for (j = 1; j <= ARITH_MAX; j++) {
 
+      if (j>*(u8*)(out_buf+i))
+      {
+        stage_max -=2;
+        continue;
+      }
+      
+
       u8 r = orig ^ (orig + j);
 
       /* Do arithmetic operations only if the result couldn't be a product
@@ -6091,8 +6173,10 @@ goto havoc_stage;
         stage_cur_val = j;
         out_buf[i] = orig + j;
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
+        //update eff map
+        *(u8*)eff_map = (u8)min(j,*(u8*)eff_map);
 
       } else stage_max--;
 
@@ -6103,8 +6187,11 @@ goto havoc_stage;
         stage_cur_val = -j;
         out_buf[i] = orig - j;
 
-        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+        if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
         stage_cur++;
+        //update eff map
+        *(u8*)eff_map = (u8)min(j,*(u8*)eff_map);
+
 
       } else stage_max--;
 
@@ -6112,7 +6199,6 @@ goto havoc_stage;
       queue_cur->edit_distance-=8;
 
     }
-
   }
 
   new_hit_cnt = queued_paths + unique_crashes;
@@ -6121,8 +6207,6 @@ goto havoc_stage;
   stage_cycles[STAGE_ARITH8] += stage_max;
 
  
-
-skip_arith:
 
   /**********************
    * INTERESTING VALUES *
@@ -6145,7 +6229,7 @@ skip_arith:
 
     /* Let's consult the effector map... */
 
-    if (!eff_map[EFF_APOS(i)]) {
+    if (!eff_map[i/2]) {
       stage_max -= sizeof(interesting_8);
       continue;
     }
@@ -6155,9 +6239,9 @@ skip_arith:
     for (j = 0; j < sizeof(interesting_8); j++) {
 
       /* Skip if the value could be a product of bitflips or arithmetics. */
-
+      ex_temp = abs(*(out_buf+i)-interesting_8[j]);
       if (could_be_bitflip(orig ^ (u8)interesting_8[j]) ||
-          could_be_arith(orig, (u8)interesting_8[j], 1)) {
+          could_be_arith(orig, (u8)interesting_8[j], 1) ||  ex_temp>*(u8*)(eff_map+i)) {
         stage_max--;
         continue;
       }
@@ -6165,8 +6249,9 @@ skip_arith:
       stage_cur_val = interesting_8[j];
       out_buf[i] = interesting_8[j];
       queue_cur->edit_distance+=8;
-      if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
-
+      if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
+      //update
+      *(u8*)eff_map = (u8)ex_temp;
       out_buf[i] = orig;
       stage_cur++;
       queue_cur->edit_distance-=8;
@@ -6189,9 +6274,20 @@ skip_arith:
 
   orig_hit_cnt = new_hit_cnt;
 
+
+
+
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
+
     stage_cur_byte = stage_cur >> 3;
+
+    if (eff_map[stage_cur_byte/2] || UR(10)<9)
+    {
+      stage_max--;
+      continue;
+    }
+    
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
@@ -6199,7 +6295,8 @@ skip_arith:
     FLIP_BIT(out_buf, stage_cur + 3);
     queue_cur->edit_distance+=4;
 
-    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
+    
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
@@ -6224,13 +6321,20 @@ skip_arith:
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
+    if (eff_map[stage_cur_byte/2] || UR(100)<95)
+    {
+      stage_max--;
+      continue;
+    }
+    
+
     stage_cur_byte = stage_cur >> 3;
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
     queue_cur->edit_distance+=2;
 
-    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
@@ -6259,12 +6363,19 @@ skip_arith:
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
+    if (eff_map[stage_cur_byte/2] || UR(100)<95)
+    {
+      stage_max--;
+      continue;
+    }
+    
+
     stage_cur_byte = stage_cur >> 3;
 
     FLIP_BIT(out_buf, stage_cur);
     queue_cur->edit_distance+=1;
 
-    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+    if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
 
     FLIP_BIT(out_buf, stage_cur);
     queue_cur->edit_distance-=1;
@@ -6324,6 +6435,8 @@ skip_arith:
 
 skip_interest:
 
+goto skip_user_extras;
+
   /********************
    * DICTIONARY STUFF *
    ********************/
@@ -6372,7 +6485,7 @@ skip_interest:
       last_len = extras[j].len;
       memcpy(out_buf + i, extras[j].data, last_len);
       queue_cur->edit_distance+=last_len;
-      if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+      if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
       queue_cur->edit_distance-=last_len;
       stage_cur++;
 
@@ -6417,7 +6530,7 @@ skip_interest:
       memcpy(ex_tmp + i + extras[j].len, out_buf + i, len - i);
       
       queue_cur->edit_distance+=extras[j].len;
-      if (common_fuzz_stuff(argv,orig_in, ex_tmp, len + extras[j].len,queue_cur->edit_distance)) {
+      if (common_fuzz_stuff(argv,orig_in, ex_tmp, len + extras[j].len,queue_cur->edit_distance,eff_map)) {
         ck_free(ex_tmp);
         goto abandon_entry;
       }
@@ -6474,7 +6587,7 @@ skip_user_extras:
       last_len = a_extras[j].len;
       memcpy(out_buf + i, a_extras[j].data, last_len);
       queue_cur->edit_distance+=last_len;
-      if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance)) goto abandon_entry;
+      if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
       queue_cur->edit_distance-=last_len;
       stage_cur++;
 
@@ -6942,7 +7055,7 @@ havoc_stage:
     
     
     queue_cur->edit_distance+=dist_tmp;
-    if (common_fuzz_stuff(argv,orig_in, out_buf, temp_len,queue_cur->edit_distance))
+    if (common_fuzz_stuff(argv,orig_in, out_buf, temp_len,queue_cur->edit_distance,eff_map))
       goto abandon_entry;
     // queue_cur->edit_distance-=dist_tmp;
 
@@ -7217,7 +7330,7 @@ static void sync_fuzzers(char** argv) {
         if (stop_soon) return;
 
         syncing_party = sd_ent->d_name;
-        queued_imported += save_if_interesting(argv, mem, st.st_size, fault,queue_cur->edit_distance);
+        // queued_imported += save_if_interesting(argv, mem, st.st_size, fault,queue_cur->edit_distance);
         syncing_party = 0;
 
         munmap(mem, st.st_size);
@@ -7662,6 +7775,11 @@ EXP_ST void setup_dirs_fds(void) {
   tmp = alloc_printf("%s/mistakes", out_dir);
   if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
   ck_free(tmp);
+
+  tmp = alloc_printf("%s/eff_maps", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
 //not dir but files
   tmp = alloc_printf("%s/out_edit_distance.txt", out_dir);
   distance_f = fopen(tmp,"w");
