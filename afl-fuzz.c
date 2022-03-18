@@ -3328,19 +3328,19 @@ static void write_crash_readme(void) {
 // Wh4lter
 // helper function of save_if_interesting
 
-static double evaluate_testcase(int input_distance,int output_distance)
-{
-  return (double)output_distance/(double)input_distance;
-  //calculate the evulution potential of testcase
+// static double evaluate_testcase(int input_distance,int output_distance)
+// {
+//   return (double)output_distance/(double)input_distance;
+//   //calculate the evulution potential of testcase
 
-}
+// }
 
 
 /* Check if the result of an execve() during routine fuzzing is interesting,
    save or queue the input test case for further analysis if so. Returns 1 if
    entry is saved, 0 otherwise. */
 
-static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit_distance,u8* eff_map) {
+static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit_distance,u16* eff_map) {
 
   u8  *fn = "";
   u8  hnb;
@@ -3416,6 +3416,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit
     if (len!=sizeof(eff_map))
     {
       //need a new eff_map
+      //save the old eff_map
       u8* map_name = alloc_printf("%s/eff_maps/%06u", out_dir,++eff_map_number);
       s32 fd = open(map_name,O_WRONLY | O_CREAT | O_TRUNC, 0600);
       ck_write(fd, eff_map, sizeof(map_name), map_name);
@@ -3792,13 +3793,13 @@ static void write_stats_file(double bitmap_cvg, double stability, double eps) {
 
 static void maybe_update_plot_file(double bitmap_cvg, double eps) {
 
-  static u32 prev_qp, prev_pf, prev_pnf, prev_ce, prev_md;
+  static u32 prev_qp, prev_pf, prev_pnf, prev_ce, prev_md,prev_wt;
   static u64 prev_qc, prev_uc, prev_uh;
 
   if (prev_qp == queued_paths && prev_pf == pending_favored && 
       prev_pnf == pending_not_fuzzed && prev_ce == current_entry &&
       prev_qc == queue_cycle && prev_uc == unique_crashes &&
-      prev_uh == unique_hangs && prev_md == max_depth) return;
+      prev_uh == unique_hangs && prev_md == max_depth &&prev_wt == wrong_translations) return;
 
   prev_qp  = queued_paths;
   prev_pf  = pending_favored;
@@ -3808,6 +3809,7 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
   prev_uc  = unique_crashes;
   prev_uh  = unique_hangs;
   prev_md  = max_depth;
+  prev_wt = wrong_translations;
 
   /* Fields in the file:
 
@@ -3816,10 +3818,10 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
      execs_per_sec */
 
   fprintf(plot_file, 
-          "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f\n",
+          "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f ,%u\n",
           get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
           pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
-          unique_hangs, max_depth, eps); /* ignore errors */
+          unique_hangs, max_depth, eps,prev_wt); /* ignore errors */
 
   fflush(plot_file);
 
@@ -4934,7 +4936,7 @@ abort_trimming:
    error conditions, returning 1 if it's time to bail out. This is
    a helper function for fuzz_one(). */
 
-EXP_ST u8 common_fuzz_stuff(char** argv,u8* in_buf, u8* out_buf, u32 len,int edit_distance,u8* eff_map) {
+EXP_ST u8 common_fuzz_stuff(char** argv,u8* in_buf, u8* out_buf, u32 len,int edit_distance,u16* eff_map) {
 
   u8 fault;
 
@@ -5296,12 +5298,147 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le) {
 }
 
 //Wh4lter
+
+
+int get_size(u8* wav_buf)
+{
+    u32 size=0;
+    size = *(u32*)(wav_buf + 0x04);
+    return size+8;
+
+}
+
+//helper for wav modification
+int size_fixer(u8* wav_buf,u32 len)
+{
+    //Size      offset:0x04    length:0x04  size=length-8
+    //data_size offset:0x4A    length:0x04  data_size=length-0x4E
+    u32 size=0,right_size=len-8;
+    u32 data_size=0,right_data_size=len-0x4E;
+    size = *(u32*)(wav_buf + 0x04);
+    data_size = *(u32*)(wav_buf + 0x4A);
+
+    // printf("%d\n%d\n",size,data_size);
+    // printf("should be:%d\n%d\n",right_size,right_data_size);
+
+    //check
+    if (right_size!=size)
+    {
+        *(u32*)(wav_buf + 0x04)=right_size;
+    }
+    if (right_data_size!=data_size)
+    {
+        *(u32*)(wav_buf + 0x4A) = right_data_size;
+    }
+    
+    // printf("%d\n%d\n",*(u32*)(wav_buf + 0x04),*(u32*)(wav_buf + 0x4A));
+
+    
+    return 0;
+}
+
 //helper of my own mutation strategy
-static u8 wav_size_check(u8* out_buf,u8 len)
+// static u8 wav_size_check(u8* out_buf,u8 len)
+// {
+
+//   return 0;
+// }
+
+//frequency modification  return edit_distance
+// TODO add or subtract a value || multiply a rate
+int freq_mod(u8* wav_buf,u32 start,u32 width,u32 length,u16 value)
+{
+    u16 step = 2;
+    // u32
+    if (start+2*width>length)return 0;
+    
+    for (size_t i = 0; i < width; i+=step)
+    {
+        *(u16*)(wav_buf + start + 2*i) += value;
+        //add edit distance
+    }
+    size_fixer(wav_buf,length);
+    return 16*width;
+}
+//speed modification
+//width is sample point offset,not memory offset!
+//so that temp_len and i are also the sample point number
+//start is the memory offset!
+int speed_up(u8* wav_buf,u32 start,u32 width,u32 length,u16 rate)
+{
+    u32 temp_len = 0;
+    u8 *new_buf;
+    // u8 *new_buf,*temp_buf;
+    if (start+2*width>length)return 0;
+    new_buf = ck_alloc(length-(rate-1)*2*width);
+    // temp_buf = malloc(sizeof(u8)*width);
+
+    //Head
+    memcpy(new_buf,wav_buf,start);
+
+    //modified block
+    for (size_t i = 0; i < width; i+=rate,temp_len++)
+    {
+        *(u16*)(new_buf + start + 2*temp_len) = *(u16*)(wav_buf+start+2*i);
+    }
+    
+    
+    //Tail
+    memcpy(new_buf+start+2*temp_len,wav_buf+start+2*width,length-start-2*width);
+    
+    free(wav_buf);
+    wav_buf = new_buf;
+    size_fixer(wav_buf,length-2*width+2*temp_len);
+    return (int)(16*width*(rate-1)/rate);
+
+}
+
+
+int speed_down(u8* wav_buf,u32 start,u32 width,u32 length,u16 rate)
+{
+    u32 temp_len = 0;
+    u8 *new_buf;
+    if (start+2*width>length)return 0;
+    // new_buf = ck_alloc_nozero();
+    new_buf = malloc(sizeof(u8)*(length+2*width*(rate-1)));
+
+    //Head
+    memcpy(new_buf,wav_buf,start);
+    //modified block
+
+    //middle
+    for (size_t i = 0; i < width; i+=rate,temp_len++)
+    {
+        for (size_t j = 0; j < rate; j++)
+        {
+            *(u16*)(new_buf + start+2*(i*rate+j)) = *(u16*)(wav_buf+start+2*i);
+        }
+         
+    }
+    //Tail
+    memcpy(wav_buf+start+2*width*rate,wav_buf+start+2*width,length-start-2*width);
+    free(wav_buf);
+    wav_buf = new_buf;
+    size_fixer(wav_buf,length+2*width*(rate-1));
+    return (int)(16*width*(rate-1));
+
+}
+
+//MIX
+
+int voice_mix(u8* out_buf,u8* insert_buf,u32 start,u32 length,u32 insert_length,double ratio)
 {
 
-  return 0;
+    for (size_t i = start; i < (length<insert_length?length:insert_length); i+=2)
+    {
+        //new = old + ratio*insert
+        u16 temp = *(u16*)(insert_buf+i);
+        *(u16*)(out_buf+i) += (u16)(ratio*(double)temp);
+    }
+
+    return 0;
 }
+
 
 u16 min(u16 a, u16 b)
 {
@@ -5325,11 +5462,12 @@ static u8 update_eff(u16* eff_map,u16 pos,u16 tc_diff_value)
 
 static u8 fuzz_one(char** argv) {
 
-  s32 len, fd, temp_len, i, j;
-  u8  *in_buf, *out_buf, *orig_in, *ex_tmp,*ex_eff_map = 0;
-  u16* eff_map;
+  u32 len, fd, temp_len, i, j;
+  u8  *in_buf, *out_buf, *orig_in, *ex_tmp;
+  u16* eff_map,orig_eff_map;
   u64 havoc_queued,  orig_hit_cnt, new_hit_cnt;
-  u32 splice_cycle = 0, perf_score = 100, orig_perf, prev_cksum, eff_cnt = 1;
+
+  u32 splice_cycle = 0, perf_score = 100, orig_perf, prev_cksum;
   u16 ex_temp,ex_temp2;
   u8  ret_val = 1, doing_det = 0;
 
@@ -5443,25 +5581,25 @@ static u8 fuzz_one(char** argv) {
    * TRIMMING *
    ************/
 
-  if (!dumb_mode && !queue_cur->trim_done) {
+  // if (!dumb_mode && !queue_cur->trim_done) {
 
-    u8 res = trim_case(argv, queue_cur, in_buf);
+  //   u8 res = trim_case(argv, queue_cur, in_buf);
 
-    if (res == FAULT_ERROR)
-      FATAL("Unable to execute target application");
+  //   if (res == FAULT_ERROR)
+  //     FATAL("Unable to execute target application");
 
-    if (stop_soon) {
-      cur_skipped_paths++;
-      goto abandon_entry;
-    }
+  //   if (stop_soon) {
+  //     cur_skipped_paths++;
+  //     goto abandon_entry;
+  //   }
 
-    /* Don't retry trimming, even if it failed. */
+  //   /* Don't retry trimming, even if it failed. */
 
-    queue_cur->trim_done = 1;
+  //   queue_cur->trim_done = 1;
 
-    if (len != queue_cur->len) len = queue_cur->len;
+  //   if (len != queue_cur->len) len = queue_cur->len;
 
-  }
+  // }
 
   memcpy(out_buf, in_buf, len);
 
@@ -5475,16 +5613,7 @@ static u8 fuzz_one(char** argv) {
      this entry ourselves (was_fuzzed), or if it has gone through deterministic
      testing in earlier, resumed runs (passed_det). */
 
-  if (skip_deterministic || queue_cur->was_fuzzed || queue_cur->passed_det)
-    goto havoc_stage;
 
-  /* Skip deterministic fuzzing if exec path checksum puts this out of scope
-     for this master instance. */
-
-  if (master_max && (queue_cur->exec_cksum % master_max) != master_id - 1)
-    goto havoc_stage;
-
-  doing_det = 1;
 
 //Wh4lter
 //eff_map -> ex_eff_map
@@ -5511,9 +5640,10 @@ static u8 fuzz_one(char** argv) {
       s32 fd = open(map_name,O_RDONLY);
       if (fd < 0) PFATAL("Unable to open '%s'", map_name);
       ck_read(fd,eff_map,len,map_name);
+      free(map_name);  
     }else
     {
-      eff_map = malloc(sizeof(u16)*(len/2));
+      eff_map = ck_alloc_nozero(len);
       // eff_map[0] = 1;
       for (size_t i = 0; i < 0x4E/2; i++)
       {
@@ -5522,9 +5652,19 @@ static u8 fuzz_one(char** argv) {
       for (size_t i = 0x4E/2; i < len/2; i++)
       {
         eff_map[i]=0xFFFF;
-      }  
+      } 
     }
-    free(map_name);  
+
+  if (skip_deterministic || queue_cur->was_fuzzed || queue_cur->passed_det)
+    goto havoc_stage;
+
+  /* Skip deterministic fuzzing if exec path checksum puts this out of scope
+     for this master instance. */
+
+  if (master_max && (queue_cur->exec_cksum % master_max) != master_id - 1)
+    goto havoc_stage;
+
+  doing_det = 1;
 
   /*********************************************
    * 16bits                                    *
@@ -6616,6 +6756,9 @@ skip_extras:
    * RANDOM HAVOC *
    ****************/
 
+orig_eff_map = ck_alloc(len);
+
+
 havoc_stage:
 //#TODO 1. noise insertion;2. speed change;3. volume change
   stage_cur_byte = -1;
@@ -6654,8 +6797,8 @@ havoc_stage:
   /* We essentially just do several thousand runs (depending on perf_score)
      where we take the input file and make random stacked tweaks. */
 
-  u32 dist_tmp=0;
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+  u32 dist_tmp=0;
 
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
 
@@ -6663,8 +6806,9 @@ havoc_stage:
 
     // double orig_dist = queue_cur->edit_distance;
     for (i = 0; i < use_stacking; i++) {
-
-      switch (UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0))) {
+      
+      // int x = 13;
+      switch (UR(14)) {
 
         case 0:
 
@@ -6678,7 +6822,7 @@ havoc_stage:
 
           /* Set byte to interesting value. */
 
-          out_buf[UR(temp_len)] = interesting_8[UR(sizeof(interesting_8))];
+          out_buf[UR(temp_len-0x4E)+0x4E] = interesting_8[UR(sizeof(interesting_8))];
           dist_tmp+=8;
           break;
 
@@ -6690,12 +6834,12 @@ havoc_stage:
 
           if (UR(2)) {
 
-            *(u16*)(out_buf + UR(temp_len - 1)) =
+            *(u16*)(out_buf + UR(temp_len - 1-0x4E)+0x4E) =
               interesting_16[UR(sizeof(interesting_16) >> 1)];
 
           } else {
 
-            *(u16*)(out_buf + UR(temp_len - 1)) = SWAP16(
+            *(u16*)(out_buf + UR(temp_len - 1-0x4E)+0x4E) = SWAP16(
               interesting_16[UR(sizeof(interesting_16) >> 1)]);
 
           }
@@ -6711,12 +6855,12 @@ havoc_stage:
 
           if (UR(2)) {
   
-            *(u32*)(out_buf + UR(temp_len - 3)) =
+            *(u32*)(out_buf + UR(temp_len - 3-0x4E)+0x4E) =
               interesting_32[UR(sizeof(interesting_32) >> 2)];
 
           } else {
 
-            *(u32*)(out_buf + UR(temp_len - 3)) = SWAP32(
+            *(u32*)(out_buf + UR(temp_len - 3-0x4E)+0x4E) = SWAP32(
               interesting_32[UR(sizeof(interesting_32) >> 2)]);
 
           }
@@ -6773,13 +6917,13 @@ havoc_stage:
 
           if (UR(2)) {
 
-            u32 pos = UR(temp_len - 1);
+            u32 pos = UR(temp_len - 1-0x4E)+0x4E;
 
             *(u16*)(out_buf + pos) += 1 + UR(ARITH_MAX);
 
           } else {
 
-            u32 pos = UR(temp_len - 1);
+            u32 pos = UR(temp_len - 1-0x4E)+0x4E;
             u16 num = 1 + UR(ARITH_MAX);
 
             *(u16*)(out_buf + pos) =
@@ -6843,86 +6987,11 @@ havoc_stage:
              why not. We use XOR with 1-255 to eliminate the
              possibility of a no-op. */
 
-          out_buf[UR(temp_len)] ^= 1 + UR(255);
+          out_buf[UR(temp_len-0x4E)+0x4E] ^= 1 + UR(255);
           dist_tmp+=8;
           break;
 
-        case 11 ... 12: {
-
-            /* Delete bytes. We're making this a bit more likely
-               than insertion (the next option) in hopes of keeping
-               files reasonably small. */
-
-            u32 del_from, del_len;
-
-            if (temp_len < 2) break;
-
-            /* Don't delete too much. */
-
-            del_len = choose_block_len(temp_len - 1);
-
-            del_from = UR(temp_len - del_len + 1);
-
-            memmove(out_buf + del_from, out_buf + del_from + del_len,
-                    temp_len - del_from - del_len);
-
-            temp_len -= del_len;
-
-            break;
-            dist_tmp+=del_len;
-          }
-
-        case 13:
-
-          if (temp_len + HAVOC_BLK_XL < MAX_FILE) {
-
-            /* Clone bytes (75%) or insert a block of constant bytes (25%). */
-
-            u8  actually_clone = UR(4);
-            u32 clone_from, clone_to, clone_len;
-            u8* new_buf;
-
-            if (actually_clone) {
-
-              clone_len  = choose_block_len(temp_len);
-              clone_from = UR(temp_len - clone_len + 1);
-
-            } else {
-
-              clone_len = choose_block_len(HAVOC_BLK_XL);
-              clone_from = 0;
-
-            }
-
-            clone_to   = UR(temp_len);
-
-            new_buf = ck_alloc_nozero(temp_len + clone_len);
-
-            /* Head */
-
-            memcpy(new_buf, out_buf, clone_to);
-
-            /* Inserted part */
-
-            if (actually_clone)
-              memcpy(new_buf + clone_to, out_buf + clone_from, clone_len);
-            else
-              memset(new_buf + clone_to,
-                     UR(2) ? UR(256) : out_buf[UR(temp_len)], clone_len);
-
-            /* Tail */
-            memcpy(new_buf + clone_to + clone_len, out_buf + clone_to,
-                   temp_len - clone_to);
-
-            ck_free(out_buf);
-            out_buf = new_buf;
-            temp_len += clone_len;
-
-          dist_tmp+=clone_len;
-          }
-          break;
-
-        case 14: {
+        case 11: {
 
             /* Overwrite bytes with a randomly selected chunk (75%) or fixed
                bytes (25%). */
@@ -6931,10 +7000,10 @@ havoc_stage:
 
             if (temp_len < 2) break;
 
-            copy_len  = choose_block_len(temp_len - 1);
+            copy_len  = choose_block_len(temp_len - 1-0x4E);
 
-            copy_from = UR(temp_len - copy_len + 1);
-            copy_to   = UR(temp_len - copy_len + 1);
+            copy_from = UR(temp_len - copy_len + 1-0x4E)+0x4E;
+            copy_to   = UR(temp_len - copy_len + 1-0x4E)+0x4E;
 
             if (UR(4)) {
 
@@ -6951,128 +7020,117 @@ havoc_stage:
         /* Values 15 and 16 can be selected only if there are any extras
            present in the dictionaries. */
 
-        case 15: {
+        case 12: {
+          //freq mod
+          u32 start = UR(temp_len-0x4E)+0x4E;
+          u32 width = UR(200);
+          u16 value = UR(0xFFFF);
 
-            /* Overwrite bytes with an extra. */
-
-            if (!extras_cnt || (a_extras_cnt && UR(2))) {
-
-              /* No user-specified extras or odds in our favor. Let's use an
-                 auto-detected one. */
-
-              u32 use_extra = UR(a_extras_cnt);
-              u32 extra_len = a_extras[use_extra].len;
-              u32 insert_at;
-
-              if (extra_len > temp_len) break;
-
-              insert_at = UR(temp_len - extra_len + 1);
-              memcpy(out_buf + insert_at, a_extras[use_extra].data, extra_len);
-              dist_tmp+=extra_len;
-
-            } else {
-
-              /* No auto extras or odds in our favor. Use the dictionary. */
-
-              u32 use_extra = UR(extras_cnt);
-              u32 extra_len = extras[use_extra].len;
-              u32 insert_at;
-
-              if (extra_len > temp_len) break;
-
-              insert_at = UR(temp_len - extra_len + 1);
-              memcpy(out_buf + insert_at, extras[use_extra].data, extra_len);
-              dist_tmp+=extra_len;
-
-            }
-
-            break;
-
+          dist_tmp+= freq_mod(out_buf,start,width,temp_len,value);
+          break;
           }
 
-        case 16: {
+        case 13: {
+          //speed_up
+          u32 start = UR(temp_len-0x4E)+0x4E;
+          start = (start >> 1)<<1;
+          u32 width = UR(0x100);
+          // u32 start = 0x3900;
+          // u32 width = 0x100;
+          if (start+2*width>temp_len)break;
+          // printf("%llu,%llu,%llu\n",start,width,temp_len);
+          
+          u32 jj = 0;
+          u8 *new_buf;
+          u8 rate = 2;
+          new_buf = ck_alloc_nozero(temp_len-(rate-1)*2*width/rate);
 
-            u32 use_extra, extra_len, insert_at = UR(temp_len + 1);
-            u8* new_buf;
+          //Head
+          memcpy(new_buf,out_buf,start);
 
-            /* Insert an extra. Do the same dice-rolling stuff as for the
-               previous case. */
-
-            if (!extras_cnt || (a_extras_cnt && UR(2))) {
-
-              use_extra = UR(a_extras_cnt);
-              extra_len = a_extras[use_extra].len;
-
-              if (temp_len + extra_len >= MAX_FILE) break;
-
-              new_buf = ck_alloc_nozero(temp_len + extra_len);
-
-              /* Head */
-              memcpy(new_buf, out_buf, insert_at);
-
-              /* Inserted part */
-              memcpy(new_buf + insert_at, a_extras[use_extra].data, extra_len);
-              dist_tmp+=extra_len;
-
-
-            } else {
-
-              use_extra = UR(extras_cnt);
-              extra_len = extras[use_extra].len;
-
-              if (temp_len + extra_len >= MAX_FILE) break;
-
-              new_buf = ck_alloc_nozero(temp_len + extra_len);
-
-              /* Head */
-              memcpy(new_buf, out_buf, insert_at);
-
-              /* Inserted part */
-              memcpy(new_buf + insert_at, extras[use_extra].data, extra_len);
-              dist_tmp+=extra_len;
-
-
-            }
-
-            /* Tail */
-            memcpy(new_buf + insert_at + extra_len, out_buf + insert_at,
-                   temp_len - insert_at);
-
-            ck_free(out_buf);
-            out_buf   = new_buf;
-            temp_len += extra_len;
-
-            break;
-
+          // modified block
+          for (size_t ii = 0; ii < width/rate; ii+=rate,jj++)
+          {
+              // *(u16*)(new_buf + start + 2*j) = *(u16*)(out_buf+start+2*i);
+              memcpy(new_buf+start+2*jj,out_buf+start+2*ii,2);
           }
-        case 17: {
+          
+          //Tail
+          memcpy(new_buf+start+2*width/rate,out_buf+start+2*width,temp_len-start-2*width);
+          
+          ck_free(out_buf);
+          out_buf = new_buf;
+          size_fixer(out_buf,temp_len-(rate-1)*2*width);
+          dist_tmp+=(int)(16*width*(rate-1)/rate);
+          temp_len-=(rate-1)*2*width;
+          break;
+        }
 
+
+        // case 14:
+        // {
+        //   //speed down but maybe it is useless
+        //   u32 start = UR(temp_len-0x4E)+0x4E;
+        //   u32 width = UR(200);
+        //   if (start+2*width>temp_len)break;
+        //   u8 rate = 2;
+          
+        //   u8 *new_buf;
+          
+        //   new_buf = ck_alloc(temp_len+2*width*(rate-1));
+        //   //Head
+        //   memcpy(new_buf,out_buf,start);
+        //   //modified block
+
+        //   for (size_t i = 0; i < width; i+=rate)
+        //   {
+        //       for (size_t j = 0; j < rate; j++)
+        //       {
+        //           *(u16*)(new_buf + start+2*(i*rate+j)) = *(u16*)(out_buf+start+2*i);
+        //       }
+              
+        //   }
+        //   //Tail
+        //   memcpy(out_buf+start+2*width*rate,out_buf+start+2*width,temp_len-start-2*width);
+        //   ck_free(out_buf);
+        //   out_buf = new_buf;
+        //   size_fixer(out_buf,temp_len+2*width*(rate-1));
+        //   dist_tmp+=(int)(16*width*(rate-1));
+        //   temp_len += (rate-1)*2*width;
+        //   break;
+        // }
+        default:
+          break;
         }
 
       }
-
-    }
-    
     
     queue_cur->edit_distance+=dist_tmp;
+
+
+    //how to update eff_map,maybe I need a new eff
     if (common_fuzz_stuff(argv,orig_in, out_buf, temp_len,queue_cur->edit_distance,eff_map))
       goto abandon_entry;
-    // queue_cur->edit_distance-=dist_tmp;
+    
 
     //dangerous mutation!
-    if (UR(10)>9)//and flag
-    {
-      //voice MIX
+    // if (UR(10)>9)//and flag
+    // {
+    //   //voice MIX
 
-    }
+    // }
     
 
     /* out_buf might have been mangled a bit, so let's restore it to its
        original size and shape. */
 
-    if (temp_len < len) out_buf = ck_realloc(out_buf, len);
-    temp_len = len;
-    memcpy(out_buf, in_buf, len);
+    if (temp_len < len)
+    {
+      out_buf = ck_realloc(out_buf, len);
+      temp_len = len;
+      memcpy(out_buf, in_buf, len);
+      
+    }
 
     /* If we're finding new stuff, let's run for a bit longer, limits
        permitting. */
@@ -7811,7 +7869,7 @@ EXP_ST void setup_dirs_fds(void) {
 
   fprintf(plot_file, "# unix_time, cycles_done, cur_path, paths_total, "
                      "pending_total, pending_favs, map_size, unique_crashes, "
-                     "unique_hangs, max_depth, execs_per_sec\n");
+                     "unique_hangs, max_depth, execs_per_sec,wrong_translation\n");
                      /* ignore errors */
 
 }
