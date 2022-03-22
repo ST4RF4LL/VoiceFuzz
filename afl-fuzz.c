@@ -3397,7 +3397,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit
   if (fault == FAULT_TRANS)
   {
     double score = (double)outbuf_distance/(double)inbuf_distance;
-    if (score<0.0001&&inbuf_distance>0.7*len)
+    if (score<0.0001&&inbuf_distance>3*len)
     {
       return keeping;//TODO
     }
@@ -3752,7 +3752,8 @@ static void write_stats_file(double bitmap_cvg, double stability, double eps) {
              "afl_version       : " VERSION "\n"
              "target_mode       : %s%s%s%s%s%s%s\n"
              "command_line      : %s\n"
-             "slowest_exec_ms   : %llu\n",
+             "slowest_exec_ms   : %llu\n"
+             "wrong translation : %llu\n",
              start_time / 1000, get_cur_time() / 1000, getpid(),
              queue_cycle ? (queue_cycle - 1) : 0, total_execs, eps,
              queued_paths, queued_favored, queued_discovered, queued_imported,
@@ -3766,7 +3767,7 @@ static void write_stats_file(double bitmap_cvg, double stability, double eps) {
              persistent_mode ? "persistent " : "", deferred_mode ? "deferred " : "",
              (qemu_mode || dumb_mode || no_forkserver || crash_mode ||
               persistent_mode || deferred_mode) ? "" : "default",
-             orig_cmdline, slowest_exec_ms);
+             orig_cmdline, slowest_exec_ms,wrong_translations);
              /* ignore errors */
 
   /* Get rss value from the children
@@ -4936,7 +4937,7 @@ abort_trimming:
    error conditions, returning 1 if it's time to bail out. This is
    a helper function for fuzz_one(). */
 
-EXP_ST u8 common_fuzz_stuff(char** argv,u8* in_buf, u8* out_buf, u32 len,int edit_distance,u16* eff_map) {
+EXP_ST u8 common_fuzz_stuff(char** argv,u8* in_buf, u8* out_buf, u32 len,int edit_distance,u8* eff_map) {
 
   u8 fault;
 
@@ -5300,13 +5301,13 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le) {
 //Wh4lter
 
 
-int get_size(u8* wav_buf)
-{
-    u32 size=0;
-    size = *(u32*)(wav_buf + 0x04);
-    return size+8;
+// int get_size(u8* wav_buf)
+// {
+//     u32 size=0;
+//     size = *(u32*)(wav_buf + 0x04);
+//     return size+8;
 
-}
+// }
 
 //helper for wav modification
 int size_fixer(u8* wav_buf,u32 len)
@@ -5337,12 +5338,6 @@ int size_fixer(u8* wav_buf,u32 len)
     return 0;
 }
 
-//helper of my own mutation strategy
-// static u8 wav_size_check(u8* out_buf,u8 len)
-// {
-
-//   return 0;
-// }
 
 //frequency modification  return edit_distance
 // TODO add or subtract a value || multiply a rate
@@ -5683,10 +5678,10 @@ static u8 fuzz_one(char** argv) {
   stage_name  = "bitflip 16/16";
   stage_short = "flip16";
   stage_cur   = 0;
-  stage_max   = (len - 1)/2;
+  stage_max   = (len - 1-0x4E)/2;
 
   orig_hit_cnt = new_hit_cnt;
-  for (i = 0; i < len - 1; i+=2) {
+  for (i = 0x4E; i < len - 1; i+=2) {
 
     /* Let's consult the effector map... */
 
@@ -5697,10 +5692,11 @@ static u8 fuzz_one(char** argv) {
 
     stage_cur_byte = i;
 
-    ex_temp = abs(*(u16*)(out_buf + i)-*(u16*)(out_buf + i) ^ 0xFFFF);
+    ex_temp = abs(*(u16*)(out_buf + i)-(*(u16*)(out_buf + i) ^ 0xFFFF));
     // printf("ex_temp:%d\n",ex_temp);
     // printf("%d\n",*(u16*)(out_buf + i));
-    if (!eff_map[i/2] || ex_temp>eff_map[i/2])
+    if (ex_temp>eff_map[i/2]||UR(100)<15)
+    // if (!eff_map[i/2] || ex_temp>eff_map[i/2]||UR(100)<5)
     {
       stage_max --;
       continue;
@@ -5738,11 +5734,11 @@ static u8 fuzz_one(char** argv) {
   stage_name  = "arith 16/16";
   stage_short = "arith16";
   stage_cur   = 0;
-  stage_max   = 2 * (len - 1) * ARITH_MAX;
+  stage_max   = 2 * (len - 1-0x4E)/2 * ARITH_MAX;
 
   orig_hit_cnt = new_hit_cnt;
 
-  for (i = 0; i < len - 1; i+=2) {
+  for (i = 0x4E; i < len - 1; i+=2) {
 
     u16 orig = *(u16*)(out_buf + i);
 
@@ -5750,7 +5746,7 @@ static u8 fuzz_one(char** argv) {
 
 
     stage_cur_byte = i;
-    if (!eff_map[i/2] || eff_map[i/2]==0xFFFF) {
+    if (eff_map[i/2]==0xFFFF) {
       stage_max -= 4 * ARITH_MAX;
       continue;
     }
@@ -5849,11 +5845,11 @@ static u8 fuzz_one(char** argv) {
   stage_name  = "interest 16/16";
   stage_short = "int16";
   stage_cur   = 0;
-  stage_max   = 1 * (len - 1) * (sizeof(interesting_16) >> 1);
+  stage_max   = 1 * (len - 1-0x4E)/2 * (sizeof(interesting_16) >> 1);
 
   orig_hit_cnt = new_hit_cnt;
 
-  for (i = 0; i < len - 1; i+=2) {
+  for (i = 0x4E; i < len - 1; i+=2) {
 
     u16 orig = *(u16*)(out_buf + i);
 
@@ -5971,8 +5967,8 @@ static u8 fuzz_one(char** argv) {
     if (common_fuzz_stuff(argv, orig_in,out_buf, len,queue_cur->edit_distance,eff_map)) goto abandon_entry;
     stage_cur++;
 
-  if (wrong_flag)update_eff(eff_map,i/2,abs(*(u16*)(out_buf + i)-*(u16*)(out_buf + i) ^ 0xFFFF));
-  if (wrong_flag)update_eff(eff_map,i/2+1,abs(*(u16*)(out_buf + i+1)-*(u16*)(out_buf + i+1) ^ 0xFFFF));
+  if (wrong_flag)update_eff(eff_map,i/2,abs(*(u16*)(out_buf + i)-(*(u16*)(out_buf + i) ^ 0xFFFF)));
+  if (wrong_flag)update_eff(eff_map,i/2+1,abs(*(u16*)(out_buf + i+1)-(*(u16*)(out_buf + i+1) ^ 0xFFFF)));
 
 
     *(u32*)(out_buf + i) ^= 0xFFFFFFFF;
@@ -6175,13 +6171,13 @@ static u8 fuzz_one(char** argv) {
   stage_cycles[STAGE_INTEREST32] += stage_max;
   //
 
-  FILE *eff_fp;
-  eff_fp = fopen("ex_eff_map.bin","wb");
-  for (size_t i = 0; i < len; i++)
-    {
-        fwrite((u8*)eff_map+i,sizeof(u8),1,eff_fp);
-    }
-    fclose(eff_fp);
+  // FILE *eff_fp;
+  // eff_fp = fopen("ex_eff_map.bin","wb");
+  // for (size_t i = 0; i < len; i++)
+  //   {
+  //       fwrite((u8*)eff_map+i,sizeof(u8),1,eff_fp);
+  //   }
+  //   fclose(eff_fp);
 
 goto havoc_stage;
 
@@ -6211,7 +6207,7 @@ goto havoc_stage;
        even when fully flipped - and we skip them during more expensive
        deterministic stages, such as arithmetics or known ints. */
 
-    if (wrong_flag)update_eff(eff_map,stage_cur_byte/2,(stage_cur_byte%2)?(abs(*(u16*)(out_buf + i)-*(u16*)(out_buf + i) ^ 0xFF00)):(abs(*(u16*)(out_buf + i)-*(u16*)(out_buf + i) ^ 0x00FF)));
+    if (wrong_flag)update_eff(eff_map,stage_cur_byte/2,(stage_cur_byte%2)?(abs(*(u16*)(out_buf + i)-(*(u16*)(out_buf + i) ^ 0xFF00))):(abs(*(u16*)(out_buf + i)-(*(u16*)(out_buf + i) ^ 0x00FF))));
 
 
     // if (!eff_map[EFF_APOS(stage_cur)]) {
@@ -6798,13 +6794,16 @@ havoc_stage:
      where we take the input file and make random stacked tweaks. */
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-  u32 dist_tmp=0;
+    u32 dist_tmp=0;
+    u32 random_num = 0;
+    u32 random_num2 = 0;
 
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
 
     stage_cur_val = use_stacking;
 
     // double orig_dist = queue_cur->edit_distance;
+    u8* temp_eff_map = ck_alloc(temp_len);//maybe I should copy from eff_map
     for (i = 0; i < use_stacking; i++) {
       
       // int x = 13;
@@ -6813,16 +6812,21 @@ havoc_stage:
         case 0:
 
           /* Flip a single bit somewhere. Spooky! */
-
-          FLIP_BIT(out_buf, UR(temp_len << 3));
+          random_num = UR((temp_len << 3)-0x4E)+0x4E;
+          FLIP_BIT(out_buf, random_num);
+          FLIP_BIT(temp_eff_map, random_num);
+          
           dist_tmp+=1;
+
           break;
 
         case 1: 
 
           /* Set byte to interesting value. */
-
-          out_buf[UR(temp_len-0x4E)+0x4E] = interesting_8[UR(sizeof(interesting_8))];
+          random_num = UR(temp_len-0x4E)+0x4E;
+          random_num2 = interesting_8[UR(sizeof(interesting_8))];
+          out_buf[random_num] = (u8)random_num2;
+          temp_eff_map[random_num] = (u8)random_num2;
           dist_tmp+=8;
           break;
 
@@ -6832,15 +6836,17 @@ havoc_stage:
 
           if (temp_len < 2) break;
 
+          random_num = UR(temp_len - 1-0x4E)+0x4E;
+          random_num2 = interesting_16[UR(sizeof(interesting_16) >> 1)];
           if (UR(2)) {
 
-            *(u16*)(out_buf + UR(temp_len - 1-0x4E)+0x4E) =
-              interesting_16[UR(sizeof(interesting_16) >> 1)];
+            *(u16*)(out_buf + random_num) =(u16)random_num2;
+            *(u16*)(temp_eff_map + random_num) =(u16)random_num2;
 
           } else {
 
-            *(u16*)(out_buf + UR(temp_len - 1-0x4E)+0x4E) = SWAP16(
-              interesting_16[UR(sizeof(interesting_16) >> 1)]);
+            *(u16*)(out_buf + random_num) = SWAP16((u16)random_num2);
+            *(u16*)(temp_eff_map + random_num) = SWAP16((u16)random_num2);
 
           }
           dist_tmp+=16;
@@ -6852,16 +6858,17 @@ havoc_stage:
           /* Set dword to interesting value, randomly choosing endian. */
 
           if (temp_len < 4) break;
-
+          random_num = UR(temp_len - 3 -0x4E)+0x4E;
+          random_num2 = interesting_32[UR(sizeof(interesting_32) >> 2)];
           if (UR(2)) {
   
-            *(u32*)(out_buf + UR(temp_len - 3-0x4E)+0x4E) =
-              interesting_32[UR(sizeof(interesting_32) >> 2)];
+            *(u32*)(out_buf + random_num) = random_num2;
+            *(u32*)(temp_eff_map + random_num) = random_num2;
 
           } else {
 
-            *(u32*)(out_buf + UR(temp_len - 3-0x4E)+0x4E) = SWAP32(
-              interesting_32[UR(sizeof(interesting_32) >> 2)]);
+            *(u32*)(out_buf + random_num) = SWAP32(random_num2);
+            *(u32*)(temp_eff_map + random_num) = SWAP32(random_num2);
 
           }
           dist_tmp +=32;
@@ -6871,16 +6878,20 @@ havoc_stage:
         case 4:
 
           /* Randomly subtract from byte. */
-
-          out_buf[UR(temp_len)] -= 1 + UR(ARITH_MAX);
+          random_num = UR(temp_len);
+          random_num2 = UR(ARITH_MAX);
+          out_buf[random_num] -= 1 + random_num2;
+          temp_eff_map[random_num] -= 1+ random_num2;
           dist_tmp+=8;
           break;
 
         case 5:
 
           /* Randomly add to byte. */
-
-          out_buf[UR(temp_len)] += 1 + UR(ARITH_MAX);
+          random_num = UR(temp_len);
+          random_num2 = UR(ARITH_MAX);
+          out_buf[random_num] += 1 + random_num2;
+          temp_eff_map[random_num] += 1+ random_num2;
           dist_tmp+=8;
           break;
 
@@ -6890,20 +6901,24 @@ havoc_stage:
 
           if (temp_len < 2) break;
 
+          random_num = 1 + UR(ARITH_MAX);
+
           if (UR(2)) {
 
             u32 pos = UR(temp_len - 1);
 
-            *(u16*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
+            *(u16*)(out_buf + pos) -= random_num;
+            *(u16*)(temp_eff_map + pos) -= random_num;
 
           } else {
 
             u32 pos = UR(temp_len - 1);
-            u16 num = 1 + UR(ARITH_MAX);
+            // u16 num = 1 + UR(ARITH_MAX);
 
             *(u16*)(out_buf + pos) =
-              SWAP16(SWAP16(*(u16*)(out_buf + pos)) - num);
-
+              SWAP16(SWAP16(*(u16*)(out_buf + pos)) - random_num);
+            *(u16*)(temp_eff_map + pos) =
+              SWAP16(SWAP16(*(u16*)(out_buf + pos)) - random_num);
           }
           dist_tmp+=16;
 
@@ -6914,20 +6929,23 @@ havoc_stage:
           /* Randomly add to word, random endian. */
 
           if (temp_len < 2) break;
-
+          random_num = 1 + UR(ARITH_MAX);
           if (UR(2)) {
 
             u32 pos = UR(temp_len - 1-0x4E)+0x4E;
 
-            *(u16*)(out_buf + pos) += 1 + UR(ARITH_MAX);
+            *(u16*)(out_buf + pos) += random_num;
+            *(u16*)(temp_eff_map+pos) += random_num;
 
           } else {
 
             u32 pos = UR(temp_len - 1-0x4E)+0x4E;
-            u16 num = 1 + UR(ARITH_MAX);
+            // u16 num = 1 + UR(ARITH_MAX);
 
             *(u16*)(out_buf + pos) =
-              SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
+              SWAP16(SWAP16(*(u16*)(out_buf + pos)) + random_num);
+            *(u16*)(temp_eff_map + pos) =
+              SWAP16(SWAP16(*(u16*)(out_buf + pos)) + random_num);
 
           }
           dist_tmp+=16;
@@ -6939,19 +6957,22 @@ havoc_stage:
 
           if (temp_len < 4) break;
 
+          u32 random_num = UR(temp_len - 3);
+          u32 random_num2 = 1 + UR(ARITH_MAX);
           if (UR(2)) {
 
-            u32 pos = UR(temp_len - 3);
 
-            *(u32*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
+            *(u32*)(out_buf + random_num) -= random_num2;
+            *(u32*)(temp_eff_map + random_num) -= random_num2;
 
           } else {
 
-            u32 pos = UR(temp_len - 3);
-            u32 num = 1 + UR(ARITH_MAX);
+            // u32 pos = UR(temp_len - 3);
 
-            *(u32*)(out_buf + pos) =
-              SWAP32(SWAP32(*(u32*)(out_buf + pos)) - num);
+            *(u32*)(out_buf + random_num) =
+              SWAP32(SWAP32(*(u32*)(out_buf + random_num)) - random_num2);
+            *(u32*)(temp_eff_map + random_num) =
+              SWAP32(SWAP32(*(u32*)(out_buf + random_num)) - random_num2);
 
           }
           dist_tmp+=32;
@@ -6963,19 +6984,24 @@ havoc_stage:
 
           if (temp_len < 4) break;
 
+          random_num = UR(temp_len - 3);
+          random_num2 = 1 + UR(ARITH_MAX);
           if (UR(2)) {
 
-            u32 pos = UR(temp_len - 3);
+            // u32 pos = UR(temp_len - 3);
 
-            *(u32*)(out_buf + pos) += 1 + UR(ARITH_MAX);
+            *(u32*)(out_buf + random_num) += random_num2;
+            *(u32*)(temp_eff_map + random_num) += random_num2;
 
           } else {
 
-            u32 pos = UR(temp_len - 3);
-            u32 num = 1 + UR(ARITH_MAX);
+            // u32 pos = UR(temp_len - 3);
+            // u32 num = 1 + UR(ARITH_MAX);
 
-            *(u32*)(out_buf + pos) =
-              SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
+            *(u32*)(out_buf + random_num) =
+              SWAP32(SWAP32(*(u32*)(out_buf + random_num)) + random_num2);
+            *(u32*)(temp_eff_map + random_num) =
+              SWAP32(SWAP32(*(u32*)(out_buf + random_num)) + random_num2);
 
           }
           dist_tmp+=32;
@@ -6986,8 +7012,10 @@ havoc_stage:
           /* Just set a random byte to a random value. Because,
              why not. We use XOR with 1-255 to eliminate the
              possibility of a no-op. */
-
-          out_buf[UR(temp_len-0x4E)+0x4E] ^= 1 + UR(255);
+          random_num = UR(temp_len-0x4E)+0x4E;
+          random_num2 =1 + UR(255); 
+          out_buf[random_num] ^= random_num2;
+          temp_eff_map[random_num] ^= random_num2;
           dist_tmp+=8;
           break;
 
@@ -7008,11 +7036,28 @@ havoc_stage:
             if (UR(4)) {
 
               if (copy_from != copy_to)
-                memmove(out_buf + copy_to, out_buf + copy_from, copy_len);
+              {
 
-            } else memset(out_buf + copy_to,
-                          UR(2) ? UR(256) : out_buf[UR(temp_len)], copy_len);
-            dist_tmp+=copy_len;
+                memmove(out_buf + copy_to, out_buf + copy_from, copy_len);
+                memmove(temp_eff_map + copy_to, temp_eff_map + copy_from, copy_len);
+              }
+            } else
+            {
+              random_num = UR(256);
+              random_num2 = UR(temp_len);
+              if (UR(2))
+              {
+                memset(out_buf + copy_to,random_num, copy_len);  
+                memset(temp_eff_map + copy_to,random_num, copy_len);
+              }else
+              {
+                memset(out_buf + copy_to,out_buf[random_num2], copy_len);
+                memset(temp_eff_map + copy_to,temp_eff_map[random_num2], copy_len);
+              }
+              
+              
+            }
+            dist_tmp+=copy_len*8;
             break;
 
           }
@@ -7027,6 +7072,7 @@ havoc_stage:
           u16 value = UR(0xFFFF);
 
           dist_tmp+= freq_mod(out_buf,start,width,temp_len,value);
+          freq_mod(temp_eff_map,start,width,temp_len,value);
           break;
           }
 
@@ -7035,31 +7081,34 @@ havoc_stage:
           u32 start = UR(temp_len-0x4E)+0x4E;
           start = (start >> 1)<<1;
           u32 width = UR(0x100);
-          // u32 start = 0x3900;
-          // u32 width = 0x100;
           if (start+2*width>temp_len)break;
-          // printf("%llu,%llu,%llu\n",start,width,temp_len);
           
           u32 jj = 0;
-          u8 *new_buf;
+          u8 *new_buf,*new_eff_map;
           u8 rate = 2;
           new_buf = ck_alloc_nozero(temp_len-(rate-1)*2*width/rate);
+          new_eff_map = ck_alloc_nozero(temp_len-(rate-1)*2*width/rate);
 
           //Head
           memcpy(new_buf,out_buf,start);
+          memcpy(new_eff_map,temp_eff_map,start);
 
           // modified block
           for (size_t ii = 0; ii < width/rate; ii+=rate,jj++)
           {
               // *(u16*)(new_buf + start + 2*j) = *(u16*)(out_buf+start+2*i);
               memcpy(new_buf+start+2*jj,out_buf+start+2*ii,2);
+              memcpy(new_eff_map+start+2*jj,temp_eff_map+start+2*ii,2);
           }
           
           //Tail
           memcpy(new_buf+start+2*width/rate,out_buf+start+2*width,temp_len-start-2*width);
+          memcpy(new_eff_map+start+2*width/rate,temp_eff_map+start+2*width,temp_len-start-2*width);
           
           ck_free(out_buf);
+          ck_free(temp_eff_map);
           out_buf = new_buf;
+          temp_eff_map = new_eff_map;
           size_fixer(out_buf,temp_len-(rate-1)*2*width);
           dist_tmp+=(int)(16*width*(rate-1)/rate);
           temp_len-=(rate-1)*2*width;
@@ -7111,7 +7160,8 @@ havoc_stage:
     //how to update eff_map,maybe I need a new eff
     if (common_fuzz_stuff(argv,orig_in, out_buf, temp_len,queue_cur->edit_distance,eff_map))
       goto abandon_entry;
-    
+    //update eff_map
+    ck_free(temp_eff_map);
 
     //dangerous mutation!
     // if (UR(10)>9)//and flag
@@ -7244,6 +7294,7 @@ retry_splicing:
     out_buf = ck_alloc_nozero(len);
     memcpy(out_buf, in_buf, len);
     queue_cur->edit_distance = len-split_at;
+    //need update eff_map
     goto havoc_stage;
 
   }
