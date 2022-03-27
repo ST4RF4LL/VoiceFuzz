@@ -3340,7 +3340,7 @@ static void write_crash_readme(void) {
    save or queue the input test case for further analysis if so. Returns 1 if
    entry is saved, 0 otherwise. */
 
-static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit_distance,u16* eff_map) {
+static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit_distance,u8* eff_map) {
 
   u8  *fn = "";
   u8  hnb;
@@ -3397,7 +3397,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault,int edit
   if (fault == FAULT_TRANS)
   {
     double score = (double)outbuf_distance/(double)inbuf_distance;
-    if (score<0.0001&&inbuf_distance>3*len)
+    if (score<0.00001&&inbuf_distance>0.5*len)
     {
       return keeping;//TODO
     }
@@ -5576,25 +5576,25 @@ static u8 fuzz_one(char** argv) {
    * TRIMMING *
    ************/
 
-  // if (!dumb_mode && !queue_cur->trim_done) {
+  if (!dumb_mode && !queue_cur->trim_done) {
 
-  //   u8 res = trim_case(argv, queue_cur, in_buf);
+    u8 res = trim_case(argv, queue_cur, in_buf);
 
-  //   if (res == FAULT_ERROR)
-  //     FATAL("Unable to execute target application");
+    if (res == FAULT_ERROR)
+      FATAL("Unable to execute target application");
 
-  //   if (stop_soon) {
-  //     cur_skipped_paths++;
-  //     goto abandon_entry;
-  //   }
+    if (stop_soon) {
+      cur_skipped_paths++;
+      goto abandon_entry;
+    }
 
-  //   /* Don't retry trimming, even if it failed. */
+    /* Don't retry trimming, even if it failed. */
 
-  //   queue_cur->trim_done = 1;
+    queue_cur->trim_done = 1;
 
-  //   if (len != queue_cur->len) len = queue_cur->len;
+    if (len != queue_cur->len) len = queue_cur->len;
 
-  // }
+  }
 
   memcpy(out_buf, in_buf, len);
 
@@ -6957,7 +6957,7 @@ havoc_stage:
 
           if (temp_len < 4) break;
 
-          u32 random_num = UR(temp_len - 3);
+          u32 random_num = UR(temp_len -3 -0x4E)+0x4E;
           u32 random_num2 = 1 + UR(ARITH_MAX);
           if (UR(2)) {
 
@@ -6984,7 +6984,7 @@ havoc_stage:
 
           if (temp_len < 4) break;
 
-          random_num = UR(temp_len - 3);
+          random_num = UR(temp_len - 3 -0x4E)+0x4E;
           random_num2 = 1 + UR(ARITH_MAX);
           if (UR(2)) {
 
@@ -7162,25 +7162,23 @@ havoc_stage:
       goto abandon_entry;
     //update eff_map
     ck_free(temp_eff_map);
+    queue_cur->edit_distance-=dist_tmp;
+
 
     //dangerous mutation!
     // if (UR(10)>9)//and flag
     // {
     //   //voice MIX
-
     // }
     
 
     /* out_buf might have been mangled a bit, so let's restore it to its
        original size and shape. */
 
-    if (temp_len < len)
-    {
-      out_buf = ck_realloc(out_buf, len);
+    if (temp_len < len)out_buf = ck_realloc(out_buf, len);
       temp_len = len;
       memcpy(out_buf, in_buf, len);
       
-    }
 
     /* If we're finding new stuff, let's run for a bit longer, limits
        permitting. */
